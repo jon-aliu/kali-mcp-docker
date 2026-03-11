@@ -1,5 +1,5 @@
 # docker-compose.yml — production-like full stack
-# All 6 services + 2 networks + 3 named volumes
+# 7 services + 2 networks + 4 named volumes
 
 version: "3.9"
 
@@ -21,6 +21,7 @@ volumes:
   postgres_data:
   redis_data:
   kali_results:
+  ollama_data:      # LLM model weights — persisted across restarts
 
 # ---------------------------------------------------------------------------
 # Services
@@ -114,6 +115,32 @@ services:
       retries:  3
 
   # -------------------------------------------------------------------------
+  # Ollama — local LLM inference (llama3, mistral, etc.)
+  # First run: docker compose exec ollama ollama pull llama3
+  # -------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-net
+    # Uncomment deploy section below if you have an NVIDIA GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test:     ["CMD-SHELL", "curl -sf http://localhost:11434/ || exit 1"]
+      interval: 20s
+      timeout:  5s
+      retries:  3
+      start_period: 10s
+
+  # -------------------------------------------------------------------------
   # FastAPI MCP Server
   # -------------------------------------------------------------------------
   mcp-server:
@@ -127,9 +154,11 @@ services:
     env_file:
       - .env
     environment:
-      POSTGRES_DSN: "postgresql+asyncpg://${POSTGRES_USER:-kalimcp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kalimcp}"
-      REDIS_URL:    "redis://:${REDIS_PASSWORD}@redis:6379/0"
-      KALI_SIDECAR_URL: "http://kali-sidecar:5000"
+      POSTGRES_DSN:      "postgresql+asyncpg://${POSTGRES_USER:-kalimcp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kalimcp}"
+      REDIS_URL:          "redis://:${REDIS_PASSWORD}@redis:6379/0"
+      KALI_SIDECAR_URL:   "http://kali-sidecar:5000"
+      OLLAMA_HOST:        "http://ollama:11434"
+      OLLAMA_MODEL:       "${OLLAMA_MODEL:-llama3}"
     networks:
       - app-net
     depends_on:
@@ -139,6 +168,8 @@ services:
         condition: service_healthy
       kali-sidecar:
         condition: service_healthy
+      ollama:
+        condition: service_started   # don't block startup; model may not be pulled yet
     healthcheck:
       test:     ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s

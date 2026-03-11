@@ -158,7 +158,39 @@ make down
 
 ---
 
-## Development mode (hot-reload)
+## Ollama (local LLM — no API key needed)
+
+Ollama is included as the 7th Docker service. It starts automatically with the stack.
+The model weights are persisted in the `ollama_data` Docker volume.
+
+**First use — pull a model (run once):**
+
+```bash
+# LLaMA 3 (~4 GB)
+docker compose exec ollama ollama pull llama3
+
+# Or lighter alternatives:
+docker compose exec ollama ollama pull mistral      # ~4 GB
+docker compose exec ollama ollama pull gemma:2b     # ~1.7 GB
+```
+
+**Switch the active model** by setting `OLLAMA_MODEL` in `.env` and restarting:
+
+```bash
+# .env
+OLLAMA_MODEL=mistral
+
+docker compose restart mcp-server
+```
+
+**GPU support (NVIDIA):** uncomment the `deploy.resources` block in `docker-compose.yml`
+under the `ollama` service section.
+
+**Select Ollama in the UI:** click the gear icon (⚙) in the chat header,
+choose **Ollama**, and click Save. No API key required.
+
+---
+
 
 The `frontend/Dockerfile.dev` runs Next.js with `npm run dev` and mounts the
 source directory as a volume so code changes are reflected immediately without

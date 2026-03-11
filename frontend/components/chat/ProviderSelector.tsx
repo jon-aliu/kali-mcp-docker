@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Settings, X, Eye, EyeOff, CheckCircle } from "lucide-react";
+import { Settings, X, Eye, EyeOff, CheckCircle, Terminal } from "lucide-react";
 import { useProviderStore } from "@/store/provider";
 
 const PROVIDERS = [
@@ -11,6 +11,7 @@ const PROVIDERS = [
     placeholder: "sk-proj-...",
     models: "GPT-4o",
     needsKey: true,
+    note: null,
   },
   {
     id: "anthropic" as const,
@@ -18,13 +19,15 @@ const PROVIDERS = [
     placeholder: "sk-ant-...",
     models: "Claude 3.5 Sonnet",
     needsKey: true,
+    note: null,
   },
   {
     id: "ollama" as const,
-    label: "Ollama (local)",
+    label: "Ollama",
     placeholder: "",
-    models: "LLaMA 3",
+    models: "LLaMA 3 · Mistral · Gemma",
     needsKey: false,
+    note: "Runs locally inside Docker — no API key required.",
   },
 ];
 
@@ -84,6 +87,9 @@ export function ProviderSelector() {
                   <div>
                     <div className="font-mono text-sm font-medium">{p.label}</div>
                     <div className="text-xs text-text/40 mt-0.5">{p.models}</div>
+                    {p.note && (
+                      <div className="text-xs text-accent/60 mt-0.5">{p.note}</div>
+                    )}
                   </div>
                   {provider === p.id && (
                     <CheckCircle size={16} className="text-accent flex-shrink-0" />
@@ -124,10 +130,27 @@ export function ProviderSelector() {
             )}
 
             {provider === "ollama" && (
-              <p className="text-xs text-text/40 font-mono bg-background border border-border rounded-xl px-4 py-3">
-                Ollama must be running and accessible from the server at the configured{" "}
-                <code className="text-accent">OLLAMA_HOST</code>. No API key required.
-              </p>
+              <div className="space-y-3">
+                <p className="text-xs text-text/50">
+                  Ollama runs inside Docker on <code className="text-accent">http://ollama:11434</code>.
+                  You must pull a model before first use:
+                </p>
+                <div className="bg-background border border-border rounded-xl px-4 py-3 space-y-1.5">
+                  <div className="flex items-center gap-2 text-xs text-text/40 font-mono mb-2">
+                    <Terminal size={12} />
+                    <span>Pull a model (run once)</span>
+                  </div>
+                  {["llama3", "mistral", "gemma:2b"].map((model) => (
+                    <code key={model} className="block text-xs text-accent/80 font-mono">
+                      docker compose exec ollama ollama pull {model}
+                    </code>
+                  ))}
+                </div>
+                <p className="text-xs text-text/30">
+                  To change the model, set <code className="text-accent">OLLAMA_MODEL</code> in your{" "}
+                  <code className="text-accent">.env</code> file and restart the stack.
+                </p>
+              </div>
             )}
 
             <button
