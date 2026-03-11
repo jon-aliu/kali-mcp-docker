@@ -1,0 +1,18 @@
+# frontend/Dockerfile.dev — hot-reload development server
+# Used by docker-compose.dev.yml: mount ./frontend:/app for live code changes
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install dependencies first (layer-cached unless package.json changes)
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Copy source (overridden at runtime by the bind-mount in docker-compose.dev.yml)
+COPY . .
+
+EXPOSE 3000
+ENV NEXT_TELEMETRY_DISABLED=1
+
+CMD ["npm", "run", "dev"]
