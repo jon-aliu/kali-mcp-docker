@@ -1,0 +1,35 @@
+# argocd-app.yaml
+# Apply with: kubectl apply -f argocd-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kali-mcp-docker
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL:        https://github.com/jon-aliu/kali-mcp-docker.git
+    targetRevision: HEAD
+    path:           k8s
+
+  destination:
+    server:    https://kubernetes.default.svc
+    namespace: kali-mcp
+
+  syncPolicy:
+    automated:
+      prune:    true   # Delete resources removed from Git
+      selfHeal: true   # Re-apply if someone manually changes the cluster
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration:    5s
+        factor:      2
+        maxDuration: 3m
