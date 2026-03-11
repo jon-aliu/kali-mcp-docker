@@ -87,12 +87,35 @@ async def _stream_ollama(messages: list[dict]) -> AsyncGenerator[str, None]:
             f"{settings.ollama_host}/api/chat",
             json={"model": settings.ollama_model, "messages": messages, "stream": True},
         ) as response:
+            if response.status_code != 200:
+                body = await response.aread()
+                try:
+                    err = json.loads(body).get("error", body.decode())
+                except Exception:
+                    err = body.decode()
+                raise RuntimeError(f"Ollama error (HTTP {response.status_code}): {err}")
+
+            got_token = False
             async for line in response.aiter_lines():
-                if line:
-                    data = json.loads(line)
-                    content = data.get("message", {}).get("content", "")
-                    if content:
-                        yield content
+                if not line:
+                    continue
+                data = json.loads(line)
+                # Ollama can return {"error": "..."} even on HTTP 200
+                if "error" in data:
+                    raise RuntimeError(
+                        f"Ollama: {data['error']} — "
+                        f"pull the model first: docker compose exec ollama ollama pull {settings.ollama_model}"
+                    )
+                content = data.get("message", {}).get("content", "")
+                if content:
+                    got_token = True
+                    yield content
+
+            if not got_token:
+                raise RuntimeError(
+                    f"Ollama returned no tokens for model '{settings.ollama_model}'. "
+                    f"Pull it first: docker compose exec ollama ollama pull {settings.ollama_model}"
+                )
 
 
 def _pick_stream(
