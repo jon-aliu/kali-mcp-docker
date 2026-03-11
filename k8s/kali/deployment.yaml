@@ -1,0 +1,53 @@
+# k8s/kali/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kali
+  namespace: kali-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kali
+  template:
+    metadata:
+      labels:
+        app: kali
+    spec:
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+      containers:
+        - name: kali
+          image: ghcr.io/jon-aliu/kali-mcp-docker/kali:latest
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu:    "250m"
+            limits:
+              memory: "2Gi"
+              cpu:    "1000m"
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+                - NET_BIND_SERVICE
+              drop:
+                - ALL
+          volumeMounts:
+                                                                                                                                        mpt                     service.yaml
+cat > k8s/kali/service.yaml << 'EOF'
+# k8s/kali/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kali-svc
+  namespace: kali-mcp
+spec:
+  selector:
+    app: kali
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP

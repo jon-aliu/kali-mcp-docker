@@ -1,0 +1,13 @@
+# k8s/kali-sidecar/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kali-sidecar-svc
+  namespace: kali-mcp
+spec:
+  selector:
+    app: kali-sidecar
+  ports:
+    - port: 5000
+      targetPort: 5000
+  type: ClusterIP

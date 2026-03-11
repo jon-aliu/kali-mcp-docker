@@ -1,0 +1,13 @@
+# k8s/mcp-server/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server-svc
+  namespace: kali-mcp
+spec:
+  selector:
+    app: mcp-server
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP

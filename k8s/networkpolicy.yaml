@@ -1,0 +1,21 @@
+# k8s/networkpolicy.yaml
+# Deny all egress from the kali pod except to kali-sidecar on port 5000
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kali-egress-restrict
+  namespace: kali-mcp
+spec:
+  podSelector:
+    matchLabels:
+      app: kali
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kali-sidecar
+      ports:
+        - protocol: TCP
+          port: 5000

@@ -1,0 +1,19 @@
+# k8s/ingress/ingress.yaml
+# Requires: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kali-mcp-ingress
+  namespace: kali-mcp
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    #tp_    # Disable bufferi et    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi   vc
+                                        number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-svc
+                port:
+                  number: 3000

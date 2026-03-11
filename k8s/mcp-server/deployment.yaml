@@ -1,0 +1,42 @@
+# k8s/mcp-server/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: kali-mcp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+    spec:
+      containers:
+        - name: mcp-server
+          image: ghcr.io/jon-aliu/kali-mcp-docker/mcp-server:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: kali-mcp-config
+            - secretRef:
+                name: kali-mcp-secrets
+          env:
+            - name: POSTGRES_DSN
+              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              valueelaySec              value: "postgSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu:    "250m"
+            limits:
+              memory: "1Gi"
+              cpu:    "1000m"

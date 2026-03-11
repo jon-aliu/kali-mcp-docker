@@ -1,0 +1,45 @@
+# k8s/kali-sidecar/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kali-sidecar
+  namespace: kali-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kali-sidecar
+  template:
+    metadata:
+      labels:
+        app: kali-sidecar
+    spec:
+      containers:
+        - name: kali-sidecar
+          image: ghcr.io/jon-aliu/kali-mcp-docker/kali-sidecar:latest
+          ports:
+            - containerPort: 5000
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+                                                                                                                                                                                                                                                                                                    ervice.yaml
+cat > k8s/kali-sidecar/service.yaml << 'EOF'
+# k8s/kali-sidecar/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kali-sidecar-svc
+  namespace: kali-mcp
+spec:
+  selector:
+    app: kali-sidecar
+  ports:
+    - port: 5000
+      targetPort: 5000
+  type: ClusterIP

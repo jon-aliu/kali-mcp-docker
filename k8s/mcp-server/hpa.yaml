@@ -1,0 +1,26 @@
+# k8s/mcp-server/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mcp-server-hpa
+  namespace: kali-mcp
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mcp-server
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      re
+                                                                                                                                                                                                                                                                                                    pat                    ort: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu:    "100m"
+            limits:
+              memory: "512Mi"
+              cpu:    "500m"

@@ -1,0 +1,7 @@
+# k8s/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kali-mcp
+  labels:
+    app.kubernetes.io/part-of: kali-mcp-docker
