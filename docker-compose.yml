@@ -1,0 +1,165 @@
+# docker-compose.yml — production-like full stack
+# All 6 services + 2 networks + 3 named volumes
+
+version: "3.9"
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  app-net:
+    driver: bridge
+
+  kali-net:
+    driver: bridge
+    internal: true   # ← Kali container cannot reach the internet directly
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+volumes:
+  postgres_data:
+  redis_data:
+  kali_results:
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL 16
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-kalimcp}
+      POSTGRES_USER:     ${POSTGRES_USER:-kalimcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-net
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kalimcp}"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+
+  # -------------------------------------------------------------------------
+  # Redis 7
+  # -------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-net
+    healthcheck:
+      test:     ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+
+  # -------------------------------------------------------------------------
+  # Kali Linux — isolated on kali-net (internal: true)
+  # -------------------------------------------------------------------------
+  kali:
+    build:
+      context: ./kali
+      dockerfile: Dockerfile
+    image: ghcr.io/jon-aliu/kali-mcp-docker/kali:latest
+    restart: unless-stopped
+    networks:
+      - kali-net
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BIND_SERVICE
+    cap_drop:
+      - ALL
+    volumes:
+      - kali_results:/home/kaliuser/results
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus:   "1.0"
+        reservations:
+          memory: 512m
+          cpus:   "0.25"
+
+  # -------------------------------------------------------------------------
+  # Kali Sidecar API — bridges kali-net and app-net; no external ports
+  # -------------------------------------------------------------------------
+  kali-sidecar:
+    build:
+      context: ./kali/sidecar
+      dockerfile: Dockerfile
+    image: ghcr.io/jon-aliu/kali-mcp-docker/kali-sidecar:latest
+    restart: unless-stopped
+    networks:
+      - kali-net
+      - app-net
+    depends_on:
+      kali:
+        condition: service_started
+    healthcheck:
+      test:     ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout:  5s
+      retries:  3
+
+  # -------------------------------------------------------------------------
+  # FastAPI MCP Server
+  # -------------------------------------------------------------------------
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    image: ghcr.io/jon-aliu/kali-mcp-docker/mcp-server:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DSN: "postgresql+asyncpg://${POSTGRES_USER:-kalimcp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kalimcp}"
+      REDIS_URL:    "redis://:${REDIS_PASSWORD}@redis:6379/0"
+      KALI_SIDECAR_URL: "http://kali-sidecar:5000"
+    networks:
+      - app-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kali-sidecar:
+        condition: service_healthy
+    healthcheck:
+      test:     ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout:  5s
+      retries:  3
+
+  # -------------------------------------------------------------------------
+  # Next.js Frontend
+  # -------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ghcr.io/jon-aliu/kali-mcp-docker/frontend:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "http://mcp-server:8000"
+    networks:
+      - app-net
+    depends_on:
+      mcp-server:
+        condition: service_healthy

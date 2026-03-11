@@ -1,0 +1,42 @@
+# docker-compose.dev.yml — development override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Or:    make dev
+
+version: "3.9"
+
+services:
+
+  postgres:
+    ports:
+      - "5432:5432"   # Expose for direct DB access (TablePlus, psql, etc.)
+
+  redis:
+    ports:
+      - "6379:6379"   # Expose for direct Redis inspection (redis-cli, RedisInsight)
+
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    volumes:
+      - ./mcp-server:/app   # Hot-reload: bind-mount source into container
+    environment:
+      APP_ENV: development
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev   # Separate dev Dockerfile that runs `npm run dev`
+    volumes:
+      - ./frontend:/app            # Hot-reload: bind-mount source
+      - /app/node_modules          # Anonymous volume to prevent host node_modules override
+      - /app/.next                 # Anonymous volume for Next.js build cache
+    environment:
+      NODE_ENV: development
+    command: ["npm", "run", "dev"]
+
+  kali-sidecar:
+    volumes:
+      - ./kali/sidecar:/app        # Hot-reload for sidecar development
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000", "--reload"]
