@@ -14,6 +14,13 @@ import httpx
 from config import settings
 from services.kali import execute_tool
 from services.session import save_message
+from services.streaming import (
+    token_event,
+    tool_start_event,
+    tool_output_event,
+    done_event,
+    error_event,
+)
 
 logger = structlog.get_logger()
 
@@ -102,16 +109,16 @@ async def stream_chat(
                 pre_tool = full_response[: match.start()].strip()
                 if pre_tool:
                     for word in pre_tool.split():
-                        yield {"type": "token", "content": word + " "}
+                        yield token_event(word + " ")
 
                 tool_json_str = match.group(1)
                 try:
                     tool_data = json.loads(tool_json_str)
                 except json.JSONDecodeError:
-                    yield {"type": "error", "message": "Invalid TOOL_CALL JSON", "code": "tool_parse_error"}
+                    yield error_event("Invalid TOOL_CALL JSON", "tool_parse_error")
                     break
 
-                yield {"type": "tool_start", "tool": tool_data["tool"], "args": tool_data.get("args", "")}
+                yield tool_start_event(tool_data["tool"], tool_data.get("args", ""))
 
                 result = await execute_tool(
                     tool_data["tool"],
@@ -119,13 +126,12 @@ async def stream_chat(
                     timeout=60,
                 )
 
-                yield {
-                    "type": "tool_output",
-                    "stdout": result["stdout"],
-                    "stderr": result["stderr"],
-                    "exit_code": result["exit_code"],
-                    "duration": result["duration"],
-                }
+                yield tool_output_event(
+                    result["stdout"],
+                    result["stderr"],
+                    result["exit_code"],
+                    result["duration"],
+                )
 
                 # Append tool output to messages and continue LLM
                 messages.append({"role": "assistant", "content": full_response})
@@ -139,19 +145,19 @@ async def stream_chat(
                     async for follow_token in _stream_openai(messages):
                         full_response += follow_token
                         tokens_used += 1
-                        yield {"type": "token", "content": follow_token}
+                        yield token_event(follow_token)
                 except Exception:
                     async for follow_token in _stream_ollama(messages):
                         full_response += follow_token
                         tokens_used += 1
-                        yield {"type": "token", "content": follow_token}
+                        yield token_event(follow_token)
                 break
             else:
-                yield {"type": "token", "content": token}
+                yield token_event(token)
 
         await save_message(conversation_id, {"role": "assistant", "content": full_response})
-        yield {"type": "done", "conversation_id": conversation_id, "tokens_used": tokens_used}
+        yield done_event(conversation_id, tokens_used)
 
     except Exception as exc:
         logger.error("llm_error", error=str(exc))
-        yield {"type": "error", "message": str(exc), "code": "llm_error"}
+        yield error_event(str(exc), "llm_error")
