@@ -1,14 +1,13 @@
 """
-LLM service — OpenAI streaming with Ollama/LLaMA3 fallback.
-Detects TOOL_CALL lines and dispatches to the kali sidecar API.
+LLM service — multi-provider streaming: OpenAI, Anthropic, Ollama.
+Provider + API key are passed per-request; falls back to env vars, then Ollama.
 """
 
 import json
 import re
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Literal
 
 import structlog
-from openai import AsyncOpenAI, APIConnectionError, RateLimitError
 import httpx
 
 from config import settings
@@ -40,12 +39,18 @@ Rules:
 
 TOOL_CALL_RE = re.compile(r'^TOOL_CALL:\s*(\{.+\})\s*$', re.MULTILINE)
 
-openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+Provider = Literal["openai", "anthropic", "ollama"]
 
 
-async def _stream_openai(messages: list[dict]) -> AsyncGenerator[str, None]:
-    """Stream tokens from OpenAI GPT-4o."""
-    stream = await openai_client.chat.completions.create(
+# ---------------------------------------------------------------------------
+# Per-provider streaming helpers
+# ---------------------------------------------------------------------------
+
+async def _stream_openai(messages: list[dict], api_key: str) -> AsyncGenerator[str, None]:
+    """Stream tokens from OpenAI."""
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(api_key=api_key)
+    stream = await client.chat.completions.create(
         model=settings.openai_model,
         messages=messages,
         stream=True,
@@ -56,8 +61,26 @@ async def _stream_openai(messages: list[dict]) -> AsyncGenerator[str, None]:
             yield delta.content
 
 
+async def _stream_anthropic(messages: list[dict], api_key: str) -> AsyncGenerator[str, None]:
+    """Stream tokens from Anthropic Claude."""
+    import anthropic
+
+    system = next((m["content"] for m in messages if m["role"] == "system"), SYSTEM_PROMPT)
+    chat_msgs = [m for m in messages if m["role"] != "system"]
+
+    client = anthropic.AsyncAnthropic(api_key=api_key)
+    async with client.messages.stream(
+        model=settings.anthropic_model,
+        max_tokens=4096,
+        system=system,
+        messages=chat_msgs,
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
+
+
 async def _stream_ollama(messages: list[dict]) -> AsyncGenerator[str, None]:
-    """Stream tokens from Ollama LLaMA3 fallback."""
+    """Stream tokens from local Ollama."""
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
             "POST",
@@ -72,11 +95,44 @@ async def _stream_ollama(messages: list[dict]) -> AsyncGenerator[str, None]:
                         yield content
 
 
+def _pick_stream(
+    provider: Provider,
+    api_key: str | None,
+    messages: list[dict],
+) -> AsyncGenerator[str, None]:
+    """
+    Select the streaming generator based on provider + key availability.
+    Falls back to Ollama if no key is available.
+    """
+    if provider == "anthropic":
+        key = api_key or settings.anthropic_api_key
+        if key:
+            return _stream_anthropic(messages, key)
+        logger.warning("anthropic_no_key_fallback_ollama")
+        return _stream_ollama(messages)
+
+    if provider == "ollama":
+        return _stream_ollama(messages)
+
+    # default: openai
+    key = api_key or settings.openai_api_key
+    if key:
+        return _stream_openai(messages, key)
+    logger.warning("openai_no_key_fallback_ollama")
+    return _stream_ollama(messages)
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
 async def stream_chat(
     user_message: str,
     history: list[dict],
     user_id: str,
     conversation_id: str,
+    provider: Provider = "openai",
+    api_key: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Main streaming generator. Yields SSE event dicts.
@@ -92,20 +148,14 @@ async def stream_chat(
     tokens_used = 0
 
     try:
-        try:
-            token_stream = _stream_openai(messages)
-        except (APIConnectionError, RateLimitError) as exc:
-            logger.warning("openai_fallback", reason=str(exc))
-            token_stream = _stream_ollama(messages)
+        token_stream = _pick_stream(provider, api_key, messages)
 
         async for token in token_stream:
             full_response += token
             tokens_used += 1
 
-            # Check for TOOL_CALL in accumulated response
             match = TOOL_CALL_RE.search(full_response)
             if match:
-                # Emit any tokens before the TOOL_CALL line
                 pre_tool = full_response[: match.start()].strip()
                 if pre_tool:
                     for word in pre_tool.split():
@@ -133,24 +183,20 @@ async def stream_chat(
                     result["duration"],
                 )
 
-                # Append tool output to messages and continue LLM
                 messages.append({"role": "assistant", "content": full_response})
+                # Anthropic doesn't accept role="tool", use role="user" instead
+                tool_role = "user" if provider == "anthropic" else "tool"
                 messages.append({
-                    "role": "tool",
+                    "role": tool_role,
                     "content": f"stdout:\n{result['stdout']}\nstderr:\n{result['stderr']}\nexit_code: {result['exit_code']}",
                 })
 
                 full_response = ""
-                try:
-                    async for follow_token in _stream_openai(messages):
-                        full_response += follow_token
-                        tokens_used += 1
-                        yield token_event(follow_token)
-                except Exception:
-                    async for follow_token in _stream_ollama(messages):
-                        full_response += follow_token
-                        tokens_used += 1
-                        yield token_event(follow_token)
+                follow_stream = _pick_stream(provider, api_key, messages)
+                async for follow_token in follow_stream:
+                    full_response += follow_token
+                    tokens_used += 1
+                    yield token_event(follow_token)
                 break
             else:
                 yield token_event(token)
@@ -159,5 +205,5 @@ async def stream_chat(
         yield done_event(conversation_id, tokens_used)
 
     except Exception as exc:
-        logger.error("llm_error", error=str(exc))
+        logger.error("llm_error", provider=provider, error=str(exc))
         yield error_event(str(exc), "llm_error")

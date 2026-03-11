@@ -7,6 +7,8 @@ import { getToken } from "@/lib/auth";
 interface ChatRequest {
   message: string;
   conversation_id: string;
+  provider?: string;
+  api_key?: string;
 }
 
 export interface SSEHandlers {

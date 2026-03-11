@@ -29,7 +29,14 @@ async def chat(
     async def event_generator():
         history = await get_conversation_messages(body.conversation_id)
         async for chunk in iter_sse(
-            stream_chat(body.message, history, user["sub"], body.conversation_id)
+            stream_chat(
+                body.message,
+                history,
+                user["sub"],
+                body.conversation_id,
+                provider=body.provider,
+                api_key=body.api_key,
+            )
         ):
             yield chunk
 

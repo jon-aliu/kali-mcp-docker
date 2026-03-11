@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { streamChat } from "@/lib/sse";
+import { useProviderStore } from "@/store/provider";
 
 export interface Message {
   id: string;
@@ -53,6 +54,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   sendMessage: async (text: string) => {
     const { conversationId, addMessage, appendToken, setStreaming } = get();
+    const { provider, apiKey } = useProviderStore.getState();
 
     addMessage({
       id: crypto.randomUUID(),
@@ -65,7 +67,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       await streamChat(
-        { message: text, conversation_id: conversationId },
+        {
+          message: text,
+          conversation_id: conversationId,
+          provider,
+          api_key: apiKey || undefined,
+        },
         {
           onToken: (token) => appendToken(token),
           onToolStart: (tool, args) => {

@@ -7,6 +7,7 @@ import { Terminal } from "lucide-react";
 import { isAuthenticated, clearToken } from "@/lib/auth";
 import { ChatWindow } from "@/components/chat/ChatWindow";
 import { InputBar } from "@/components/chat/InputBar";
+import { ProviderSelector } from "@/components/chat/ProviderSelector";
 
 // xterm.js requires window — load only on client
 const LiveTerminal = dynamic(
@@ -41,6 +42,8 @@ export default function ChatPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <ProviderSelector />
+
           <button
             onClick={() => setTerminalOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border

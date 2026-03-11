@@ -9,9 +9,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # OpenAI
-    openai_api_key: str
+    # OpenAI (optional — user can provide key per-request)
+    openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+
+    # Anthropic (optional — user can provide key per-request)
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-3-5-sonnet-20241022"
 
     # Ollama fallback
     ollama_host: str = "http://ollama:11434"
