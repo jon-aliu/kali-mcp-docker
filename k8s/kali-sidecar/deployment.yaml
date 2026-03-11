@@ -28,18 +28,18 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-                                                                                                                                                                                                                                                                                                    ervice.yaml
-cat > k8s/kali-sidecar/service.yaml << 'EOF'
-# k8s/kali-sidecar/service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: kali-sidecar-svc
-  namespace: kali-mcp
-spec:
-  selector:
-    app: kali-sidecar
-  ports:
-    - port: 5000
-      targetPort: 5000
-  type: ClusterIP
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu:    "100m"
+            limits:
+              memory: "512Mi"
+              cpu:    "500m"

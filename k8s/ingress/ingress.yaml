@@ -8,8 +8,27 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    #tp_    # Disable bufferi et    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi    # Disable bufferi   vc
-                                        number: 8000
+    # Disable buffering for SSE streaming
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # Enable WebSocket proxying
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: kali-mcp.local
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-server-svc
+                port:
+                  number: 8000
           - path: /
             pathType: Prefix
             backend:

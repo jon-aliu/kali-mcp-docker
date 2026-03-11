@@ -33,13 +33,4 @@ spec:
             exec:
               command: ["redis-cli", "-a", "$(REDIS_PASSWORD)", "ping"]
             initialDelaySeconds: 15
-            perio            perio            perio         > k            perio            perio            perio         > k            perio   e
-mmmmmmmmmmmmmmmmmmmmmmm-svc
-  namespace: kali-mcp
-spec:
-  selector:
-    app: redis
-  ports:
-    - port: 6379
-      targetPort: 6379
-  type: ClusterIP
+            periodSeconds: 10

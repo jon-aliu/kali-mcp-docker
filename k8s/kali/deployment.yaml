@@ -36,18 +36,8 @@ spec:
               drop:
                 - ALL
           volumeMounts:
-                                                                                                                                        mpt                     service.yaml
-cat > k8s/kali/service.yaml << 'EOF'
-# k8s/kali/service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: kali-svc
-  namespace: kali-mcp
-spec:
-  selector:
-    app: kali
-  ports:
-    - port: 80
-      targetPort: 80
-  type: ClusterIP
+            - name: kali-results
+              mountPath: /home/kaliuser/results
+      volumes:
+        - name: kali-results
+          emptyDir: {}

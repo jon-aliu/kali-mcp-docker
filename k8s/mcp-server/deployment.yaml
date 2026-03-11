@@ -26,13 +26,26 @@ spec:
                 name: kali-mcp-secrets
           env:
             - name: POSTGRES_DSN
-              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              value: "postgresql+asyn              valueelaySec              value: "postgSeconds: 15
+              value: "postgresql+asyncpg://kalimcp:$(POSTGRES_PASSWORD)@postgres-svc:5432/kalimcp"
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis-svc:6379/0"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 15
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
           resources:
             requests:
               memory: "256Mi"

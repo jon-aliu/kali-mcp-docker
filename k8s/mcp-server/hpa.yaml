@@ -13,14 +13,8 @@ spec:
   maxReplicas: 10
   metrics:
     - type: Resource
-      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      resource      re
-                                                                                                                                                                                                                                                                                                    pat                    ort: 3000
-            initialDelaySeconds: 30
-            periodSeconds: 15
-          resources:
-            requests:
-              memory: "128Mi"
-              cpu:    "100m"
-            limits:
-              memory: "512Mi"
-              cpu:    "500m"
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
