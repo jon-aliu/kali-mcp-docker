@@ -25,53 +25,73 @@ logger = structlog.get_logger()
 
 SYSTEM_PROMPT = """You are KaliMCP, a cybersecurity assistant with a live Kali Linux shell.
 
-IMPORTANT — answer based on the type of question:
+RULES — follow exactly:
+1. When the user asks to run a tool or needs live data → IMMEDIATELY emit TOOL_CALL. No preamble, no explanation.
+2. NEVER say "I will run", "Let me", "Sure", or describe what you're about to do. Just do it.
+3. NEVER explain command output — the user reads it themselves.
+4. Simple greetings/questions with no tool needed → one-line reply only.
 
-1. Simple questions, greetings, explanations → answer in plain text. No tool.
-2. Questions needing live data (IP, hostname, ports, hops, etc.) → use a tool.
-
-To run a tool write EXACTLY this on its own line (nothing else on that line):
+To run a tool write EXACTLY this (nothing else on that line):
 TOOL_CALL: {"tool": "<toolname>", "args": "<arguments>"}
 
-Available tools:
-  hostname, whoami, id, uname, ps          ← system info
-  ip, ifconfig, ss, netstat                ← network interfaces / sockets
-  ping, traceroute, dig, whois, nmap       ← connectivity / recon
-  curl, wget, nikto, gobuster, whatweb     ← web
-  dnsrecon, dnsenum, theHarvester          ← DNS / OSINT
-  hydra, john, hashcat                     ← password / hash
-  hping3, wfuzz, sqlmap                    ← advanced
+Available tools (any Kali tool can be used):
+  hostname whoami id uname ps ip ifconfig ss netstat
+  ping traceroute dig whois nmap curl wget
+  nikto gobuster whatweb dnsrecon dnsenum theHarvester
+  hydra john hashcat hping3 wfuzz sqlmap
 
 Examples:
-  "what is the hostname?" → TOOL_CALL: {"tool": "hostname", "args": ""}
-  "show my IP" → TOOL_CALL: {"tool": "ip", "args": "addr show"}
-  "trace to 8.8.8.8" → TOOL_CALL: {"tool": "traceroute", "args": "-m 10 8.8.8.8"}
-  "hi" → Hi! I'm KaliMCP. Ask me anything about security or the live Kali shell.
+  "run nmap on 10.0.0.1" → TOOL_CALL: {"tool": "nmap", "args": "-sV 10.0.0.1"}
+  "show my IP"           → TOOL_CALL: {"tool": "ip", "args": "addr show"}
+  "trace to 8.8.8.8"    → TOOL_CALL: {"tool": "traceroute", "args": "-m 10 8.8.8.8"}
+  "harvest emails from example.com" → TOOL_CALL: {"tool": "theHarvester", "args": "-d example.com -b all"}
 
-Rules:
-- NEVER say you cannot run commands — you have a live shell.
-- After TOOL_CALL stop and wait for output before continuing."""
+- NEVER say you cannot run commands.
+- Run first, never ask permission."""
 
 TOOL_CALL_RE = re.compile(r'^TOOL_CALL:\s*(\{.+\})\s*$', re.MULTILINE)
 
 Provider = Literal["openai", "anthropic", "ollama"]
 
 # ---------------------------------------------------------------------------
-# Keyword → tool mapping (used when small models don't follow TOOL_CALL format)
+# Keyword → tool mapping (catches direct tool requests and common queries)
 # ---------------------------------------------------------------------------
 import re as _re
 
 _KEYWORD_TOOLS: list[tuple[_re.Pattern[str], str, str]] = [
-    # (pattern, tool, args)
+    # System info
     (_re.compile(r'\b(hostname|name of (the )?host|what.{0,10}host)\b', _re.I), "hostname", ""),
     (_re.compile(r'\b(whoami|who am i|current user|running as)\b', _re.I), "whoami", ""),
-    (_re.compile(r'\b(ip address|my ip|show ip|ip addr|ifconfig|network interface)\b', _re.I), "ip", "addr show"),
+    (_re.compile(r'\b(what (user )?id|show id|my uid)\b', _re.I), "id", ""),
+    (_re.compile(r'\b(ip address|my ip|show ip|ip addr|network interface)\b', _re.I), "ip", "addr show"),
+    (_re.compile(r'\bifconfig\b', _re.I), "ifconfig", ""),
     (_re.compile(r'\b(what os|operating system|uname|kernel|linux version)\b', _re.I), "uname", "-a"),
     (_re.compile(r'\b(running processes|process list|ps aux|show processes)\b', _re.I), "ps", "aux"),
-    (_re.compile(r'\b(open ports|listening ports|ss |netstat)\b', _re.I), "ss", "-tlnp"),
-    (_re.compile(r'\bhops?.{0,15}(to |till |until |toward )?(8\.8\.8\.8|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[\w.-]+\.\w+)\b', _re.I), "traceroute", "-m 15 {target}"),
-    (_re.compile(r'\b(ping|reachable).{0,20}(8\.8\.8\.8|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[\w.-]+\.\w+)\b', _re.I), "ping", "-c 4 {target}"),
-    (_re.compile(r'\b(dns|resolve|lookup|dig).{0,20}([\w.-]+\.\w+)\b', _re.I), "dig", "+short {target}"),
+    (_re.compile(r'\b(open ports|listening ports|show ports|ss |sockets)\b', _re.I), "ss", "-tlnp"),
+    (_re.compile(r'\bnetstat\b', _re.I), "netstat", "-tulnp"),
+    # Network recon
+    (_re.compile(r'\b(traceroute|trace route|hops?.{0,10}to)\b', _re.I), "traceroute", "-m 15 {target}"),
+    (_re.compile(r'\b(ping|reachable)\b.{0,30}([\w.-]+\.[\w]+|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', _re.I), "ping", "-c 4 {target}"),
+    (_re.compile(r'\b(dns|resolve|lookup|dig)\b.{0,30}([\w.-]+\.[\w]+)', _re.I), "dig", "+short {target}"),
+    (_re.compile(r'\bwhois\b', _re.I), "whois", "{target}"),
+    (_re.compile(r'\bnmap\b', _re.I), "nmap", "-sV {target}"),
+    # Web
+    (_re.compile(r'\b(nikto|web vuln|scan (the )?web)\b', _re.I), "nikto", "-h {target}"),
+    (_re.compile(r'\bgobuster\b', _re.I), "gobuster", "dir -u http://{target} -w /usr/share/wordlists/dirb/common.txt"),
+    (_re.compile(r'\bwhatweb\b', _re.I), "whatweb", "{target}"),
+    (_re.compile(r'\b(curl|fetch|get http)\b', _re.I), "curl", "-s {target}"),
+    (_re.compile(r'\bwget\b', _re.I), "wget", "-q -O- {target}"),
+    # OSINT / DNS
+    (_re.compile(r'\bdnsrecon\b', _re.I), "dnsrecon", "-d {target}"),
+    (_re.compile(r'\bdnsenum\b', _re.I), "dnsenum", "{target}"),
+    (_re.compile(r'\b(theharvester|harvester|find emails?|emails?.{0,10}from)\b', _re.I), "theHarvester", "-d {target} -b all"),
+    # Advanced
+    (_re.compile(r'\bsqlmap\b', _re.I), "sqlmap", "-u {target} --batch"),
+    (_re.compile(r'\bhydra\b', _re.I), "hydra", "{target}"),
+    (_re.compile(r'\b(hping3|hping)\b', _re.I), "hping3", "-S {target}"),
+    (_re.compile(r'\b(hashcat|crack hash)\b', _re.I), "hashcat", "{target}"),
+    (_re.compile(r'\bjohn\b', _re.I), "john", "{target}"),
+    (_re.compile(r'\bwfuzz\b', _re.I), "wfuzz", "{target}"),
 ]
 
 def _extract_target(text: str) -> str:
@@ -226,26 +246,15 @@ async def stream_chat(
         if kw:
             tool_name, tool_args = kw
             yield tool_start_event(tool_name, tool_args)
-            result = await execute_tool(tool_name, tool_args, timeout=60)
+            result = await execute_tool(tool_name, tool_args, timeout=120)
             yield tool_output_event(
                 result["stdout"], result["stderr"],
                 result["exit_code"], result["duration"],
             )
-            # Ask LLM to summarise the output
-            tool_role = "user" if provider == "anthropic" else "tool"
-            messages.append({"role": "assistant", "content": f'TOOL_CALL: {{"tool": "{tool_name}", "args": "{tool_args}"}}'})
-            messages.append({
-                "role": tool_role,
-                "content": f"stdout:\n{result['stdout']}\nstderr:\n{result['stderr']}\nexit_code: {result['exit_code']}",
+            await save_message(conversation_id, {
+                "role": "assistant",
+                "content": f'TOOL_CALL: {{"tool": "{tool_name}", "args": "{tool_args}"}}\nstdout:\n{result["stdout"]}',
             })
-            messages.append({"role": "user", "content": "Summarise the output above in one sentence."})
-            token_stream = _pick_stream(provider, api_key, messages)
-            async for token in token_stream:
-                full_response += token
-                tokens_used += 1
-                yield token_event(token)
-
-            await save_message(conversation_id, {"role": "assistant", "content": full_response})
             yield done_event(conversation_id, tokens_used)
             return
 
@@ -260,11 +269,6 @@ async def stream_chat(
 
             match = TOOL_CALL_RE.search(full_response)
             if match:
-                pre_tool = full_response[: match.start()].strip()
-                if pre_tool:
-                    for word in pre_tool.split():
-                        yield token_event(word + " ")
-
                 tool_json_str = match.group(1)
                 try:
                     tool_data = json.loads(tool_json_str)
@@ -277,7 +281,7 @@ async def stream_chat(
                 result = await execute_tool(
                     tool_data["tool"],
                     tool_data.get("args", ""),
-                    timeout=60,
+                    timeout=120,
                 )
 
                 yield tool_output_event(
@@ -286,21 +290,12 @@ async def stream_chat(
                     result["exit_code"],
                     result["duration"],
                 )
-
-                messages.append({"role": "assistant", "content": full_response})
-                tool_role = "user" if provider == "anthropic" else "tool"
-                messages.append({
-                    "role": tool_role,
-                    "content": f"stdout:\n{result['stdout']}\nstderr:\n{result['stderr']}\nexit_code: {result['exit_code']}",
+                await save_message(conversation_id, {
+                    "role": "assistant",
+                    "content": f'{full_response}\nstdout:\n{result["stdout"]}',
                 })
-
-                full_response = ""
-                follow_stream = _pick_stream(provider, api_key, messages)
-                async for follow_token in follow_stream:
-                    full_response += follow_token
-                    tokens_used += 1
-                    yield token_event(follow_token)
-                break
+                yield done_event(conversation_id, tokens_used)
+                return
             else:
                 yield token_event(token)
 

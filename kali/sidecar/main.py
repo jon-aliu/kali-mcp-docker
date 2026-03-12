@@ -4,7 +4,10 @@ Runs inside the kali-net Docker network; never reachable from the internet.
 """
 
 import asyncio
+import os
+import re
 import shlex
+import shutil
 import time
 from typing import Optional
 
@@ -17,20 +20,28 @@ from pydantic import BaseModel, field_validator
 # Constants
 # ---------------------------------------------------------------------------
 
-ALLOWED_TOOLS = [
+# Reference list (informational — not used as a hard allowlist)
+# Any valid Kali tool can be requested; missing ones are auto-installed.
+KNOWN_TOOLS = [
     # Reconnaissance
     "nmap", "nikto", "gobuster", "sqlmap", "hydra",
     "whois", "dnsrecon", "dnsenum", "theHarvester",
-    "wfuzz", "whatweb", "hping3", "tcpdump",
+    "wfuzz", "whatweb", "hping3", "tcpdump", "masscan",
     # File / network transfer
-    "curl", "wget", "netcat", "nc", "dig",
+    "curl", "wget", "netcat", "nc", "dig", "ftp", "ssh",
     # Password / hash
     "john", "hashcat",
     # System / network info
-    "hostname", "whoami", "id", "cat", "ls",
+    "hostname", "whoami", "id", "cat", "ls", "find", "grep",
     "ip", "ifconfig", "ss", "ping", "traceroute",
-    "uname", "ps", "netstat",
+    "uname", "ps", "netstat", "lsof", "arp",
+    # OSINT
+    "maltego", "recon-ng", "metagoofil",
+    # Exploitation
+    "metasploit", "msfconsole", "searchsploit", "exploitdb",
 ]
+
+ALLOWED_TOOLS = KNOWN_TOOLS  # backward-compat alias
 
 MAX_ARGS_LENGTH = 500
 DEFAULT_TIMEOUT = 60
@@ -48,8 +59,9 @@ class ExecuteRequest(BaseModel):
     @field_validator("tool")
     @classmethod
     def validate_tool(cls, v: str) -> str:
-        if v not in ALLOWED_TOOLS:
-            raise ValueError(f"Tool '{v}' is not in ALLOWED_TOOLS")
+        # Only enforce a safe name pattern; availability is handled at execution time
+        if not re.match(r'^[a-zA-Z0-9_-]+$', v):
+            raise ValueError(f"Tool name must only contain letters, digits, hyphens and underscores")
         return v
 
     @field_validator("args")
@@ -88,6 +100,39 @@ class HealthResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Auto-install helper
+# ---------------------------------------------------------------------------
+
+async def _ensure_tool_available(tool: str) -> str:
+    """
+    Check if `tool` is on PATH. If not, attempt `apt-get install -y <tool>`.
+    Returns a status string (for logging).
+    """
+    if shutil.which(tool):
+        return "already_installed"
+
+    env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+    proc = await asyncio.create_subprocess_exec(
+        "apt-get", "install", "-y", "--no-install-recommends", tool,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return "install_timeout"
+
+    if proc.returncode == 0:
+        return "installed"
+    return "install_failed"
+
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
@@ -106,8 +151,9 @@ async def health() -> HealthResponse:
 
 @app.get("/tools", response_model=ToolsResponse)
 async def list_tools() -> ToolsResponse:
-    """Return the list of allowed tools."""
-    return ToolsResponse(tools=ALLOWED_TOOLS)
+    """Return the list of known tools, marking which are currently installed."""
+    installed = [t for t in KNOWN_TOOLS if shutil.which(t)]
+    return ToolsResponse(tools=installed)
 
 
 @app.post("/execute", response_model=ExecuteResponse)
@@ -124,6 +170,16 @@ async def execute(request: ExecuteRequest) -> ExecuteResponse:
         return JSONResponse(
             status_code=400,
             content={"detail": f"Invalid args: {exc}"},
+        )
+
+    # Ensure the tool binary exists; install via apt if missing
+    install_status = await _ensure_tool_available(request.tool)
+
+    # If still not available after install attempt, report clearly
+    if not shutil.which(request.tool) and install_status != "already_installed":
+        return JSONResponse(
+            status_code=422,
+            content={"detail": f"Tool '{request.tool}' could not be installed (apt returned: {install_status})"},
         )
 
     cmd = [request.tool] + parsed_args
