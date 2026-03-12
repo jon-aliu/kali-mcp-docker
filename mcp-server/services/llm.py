@@ -84,7 +84,7 @@ _KEYWORD_TOOLS: list[tuple[_re.Pattern[str], str, str]] = [
     # OSINT / DNS
     (_re.compile(r'\bdnsrecon\b', _re.I), "dnsrecon", "-d {target}"),
     (_re.compile(r'\bdnsenum\b', _re.I), "dnsenum", "{target}"),
-    (_re.compile(r'\b(theharvester|harvester|find emails?|emails?.{0,10}from)\b', _re.I), "theHarvester", "-d {target} -b all"),
+    (_re.compile(r'\b(theharvester|harvester|find emails?|emails?.{0,10}from)\b', _re.I), "theHarvester", "-d {target} -b google,bing"),
     # Advanced
     (_re.compile(r'\bsqlmap\b', _re.I), "sqlmap", "-u {target} --batch"),
     (_re.compile(r'\bhydra\b', _re.I), "hydra", "{target}"),
@@ -106,6 +106,75 @@ def _keyword_tool(user_message: str) -> tuple[str, str] | None:
             target = _extract_target(user_message)
             args = args_tpl.replace("{target}", target) if target else args_tpl.replace(" {target}", "").replace("{target}", "")
             return tool, args.strip()
+    return None
+
+
+# Context question patterns — user asking about results of a previous tool run
+_CONTEXT_Q = _re.compile(
+    r'\b(which|what|any|were|are there|show|list|found|results?|did.{0,10}find|tell me)\b',
+    _re.I,
+)
+
+
+def _answer_from_history(question: str, history: list[dict]) -> str | None:
+    """
+    If the question looks like a follow-up about a previous tool result,
+    parse the last tool output from history and return a direct answer.
+    Returns None if not applicable.
+    """
+    if not _CONTEXT_Q.search(question):
+        return None
+
+    # Find the most recent assistant message that contains tool output
+    last_tool_output: str | None = None
+    last_tool_name: str | None = None
+    for msg in reversed(history):
+        if msg.get("role") == "assistant" and "stdout:\n" in msg.get("content", ""):
+            content = msg["content"]
+            last_tool_output = content.split("stdout:\n", 1)[1]
+            # Extract tool name
+            m = _re.search(r'TOOL_CALL:.*?"tool":\s*"([^"]+)"', content)
+            last_tool_name = m.group(1) if m else "tool"
+            break
+
+    if not last_tool_output:
+        return None
+
+    q_lower = question.lower()
+
+    # nmap — extract open port lines
+    if last_tool_name == "nmap" or "port" in q_lower or "open" in q_lower:
+        lines = [
+            l for l in last_tool_output.splitlines()
+            if _re.match(r'^\d+/(tcp|udp)\s+open', l)
+        ]
+        if lines:
+            return "Open ports found:\n" + "\n".join(lines)
+
+    # theHarvester / email queries
+    if last_tool_name == "theHarvester" or "email" in q_lower or "harvest" in q_lower:
+        emails = _re.findall(r'[\w.+-]+@[\w.-]+\.\w{2,}', last_tool_output)
+        unique = list(dict.fromkeys(emails))
+        if unique:
+            return "Emails found:\n" + "\n".join(unique)
+        return "No emails found in the last harvest."
+
+    # dig/dns
+    if last_tool_name in ("dig", "dnsrecon", "dnsenum") or "dns" in q_lower:
+        lines = [l.strip() for l in last_tool_output.splitlines() if l.strip()]
+        return "DNS results:\n" + "\n".join(lines[:20])
+
+    # ss/netstat
+    if last_tool_name in ("ss", "netstat") or "listen" in q_lower:
+        lines = [l for l in last_tool_output.splitlines() if "LISTEN" in l or "tcp" in l.lower()]
+        if lines:
+            return "Listening sockets:\n" + "\n".join(lines)
+
+    # Generic: return the first 30 non-empty lines of last output
+    lines = [l for l in last_tool_output.splitlines() if l.strip()][:30]
+    if lines:
+        return "\n".join(lines)
+
     return None
 
 
@@ -240,6 +309,20 @@ async def stream_chat(
 
     try:
         # ------------------------------------------------------------------
+        # Context path: question about a previous tool result → answer directly
+        # ------------------------------------------------------------------
+        ctx = _answer_from_history(user_message, history)
+        if ctx:
+            for token in ctx.split():
+                tok = token + " "
+                full_response += tok
+                tokens_used += 1
+                yield token_event(tok)
+            await save_message(conversation_id, {"role": "assistant", "content": full_response.strip()})
+            yield done_event(conversation_id, tokens_used)
+            return
+
+        # ------------------------------------------------------------------
         # Fast path: keyword → run tool immediately (bypasses model format)
         # ------------------------------------------------------------------
         kw = _keyword_tool(user_message)
@@ -298,6 +381,16 @@ async def stream_chat(
                 return
             else:
                 yield token_event(token)
+
+        # If the LLM returned nothing, fall back to context parser
+        if not full_response.strip():
+            fallback = _answer_from_history(user_message, history)
+            if fallback:
+                for tok in fallback.split():
+                    t = tok + " "
+                    tokens_used += 1
+                    yield token_event(t)
+                full_response = fallback
 
         await save_message(conversation_id, {"role": "assistant", "content": full_response})
         yield done_event(conversation_id, tokens_used)
