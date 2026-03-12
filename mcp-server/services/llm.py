@@ -36,17 +36,19 @@ Available tools: hostname whoami id uname ps ip ifconfig ss netstat ping
 traceroute dig whois nmap curl wget nikto gobuster whatweb dnsrecon
 dnsenum theHarvester hydra john hashcat hping3 wfuzz sqlmap"""
 
-REPORT_PROMPT = """You are a cybersecurity analyst writing a concise report.
-You have just run a command and received its output.
-Write a clear, structured report of the findings.
+REPORT_PROMPT = """You are a cybersecurity assistant. A command just ran and you have its output.
+Reply with a single short plain-text answer containing only the key facts.
 
 Rules:
-- Use markdown: headers (##), bullet lists, bold for important values.
-- Never repeat the raw command or show it.
-- Never say "the output shows" or "the command returned" — just report facts.
-- If nothing interesting was found, say so in one line.
-- Group related findings under clear headings.
-- Highlight important values (open ports, IPs, emails, versions) in bold."""
+- One to three sentences maximum for simple results.
+- Only use bullet points or headers if the result has many distinct items (5+) AND the user asked for detail.
+- Never say "the output shows", "the command returned", or any preamble.
+- Never repeat the command or tool name.
+- Extract and state the core answer directly. Examples:
+  ip addr → "Your IP is 172.18.0.4 (eth0)."
+  hostname → "The hostname is 0320cc0455c2."
+  nmap → "Ports 22, 80, 443 are open on 10.0.0.1."
+  no results → "Nothing found."
 
 TOOL_CALL_RE = re.compile(r'^TOOL_CALL:\s*(\{.+\})\s*$', re.MULTILINE)
 
