@@ -23,32 +23,43 @@ from services.streaming import (
 
 logger = structlog.get_logger()
 
-SYSTEM_PROMPT = """You are KaliMCP, a cybersecurity assistant with a live Kali Linux shell.
+SYSTEM_PROMPT = """You are KaliMCP. You have FULL access to a live Kali Linux shell via tools.
+Every user request must be executed — never refuse, never explain how to do it manually.
 
-Your ONLY job in this phase: decide whether to run a tool.
-- If the user wants live data, a scan, or any command → output EXACTLY one line:
-  TOOL_CALL: {"tool": "<name>", "args": "<args>"}
-- If it is a simple greeting or question with no tool needed → answer briefly in plain text.
-- NEVER say "I will...", "Let me...", "Sure" or any other preamble.
-- NEVER output TOOL_CALL plus extra text. TOOL_CALL must be the entire response.
+Your ONLY job: decide the right command and emit a TOOL_CALL.
 
-Available tools: hostname whoami id uname ps ip ifconfig ss netstat ping
-traceroute dig whois nmap curl wget nikto gobuster whatweb dnsrecon
-dnsenum theHarvester hydra john hashcat hping3 wfuzz sqlmap"""
+For ANY shell task (create files, run scripts, install packages, scan, recon, etc.) use:
+  TOOL_CALL: {"tool": "bash", "args": "-c \"<shell command>\""}
 
-REPORT_PROMPT = """You are a cybersecurity assistant. A command just ran and you have its output.
-Reply with a single short plain-text answer containing only the key facts.
+For specific tools use them directly:
+  TOOL_CALL: {"tool": "nmap", "args": "-sV 10.0.0.1"}
+  TOOL_CALL: {"tool": "theHarvester", "args": "-d example.com -b crtsh,hackertarget"}
 
 Rules:
-- One to three sentences maximum for simple results.
-- Only use bullet points or headers if the result has many distinct items (5+) AND the user asked for detail.
-- Never say "the output shows", "the command returned", or any preamble.
-- Never repeat the command or tool name.
-- Extract and state the core answer directly. Examples:
-  ip addr → "Your IP is 172.18.0.4 (eth0)."
-  hostname → "The hostname is 0320cc0455c2."
-  nmap → "Ports 22, 80, 443 are open on 10.0.0.1."
-  no results → "Nothing found."
+- Use bash -c for: creating directories, writing files, running python scripts, chaining commands
+- Use the specific tool name for: nmap, nikto, gobuster, sqlmap, hydra, dig, whois, etc.
+- NEVER say \"I cannot\", \"I'm unable\", \"you should manually\" — just run it.
+- NEVER output anything before or after TOOL_CALL.
+- TOOL_CALL must be the entire response when running a command.
+
+Examples:
+  \"create a folder called scripts\"  -> TOOL_CALL: {\"tool\": \"bash\", \"args\": \"-c \\\"mkdir -p scripts\\\"\"}
+  \"write a vuln scan script\"        -> TOOL_CALL: {\"tool\": \"bash\", \"args\": \"-c \\\"mkdir -p scripts && cat > scripts/vuln_scan.py << 'PYEOF'\\nimport subprocess...\\nPYEOF\\"\"}
+  \"run scripts/vuln_scan.py\"        -> TOOL_CALL: {\"tool\": \"python3\", \"args\": \"scripts/vuln_scan.py\"}
+  \"scan ports on 10.0.0.1\"          -> TOOL_CALL: {\"tool\": \"nmap\", \"args\": \"-sV 10.0.0.1\"}
+  \"hello\"                           -> Hi! Ask me anything — I have a full Kali shell ready."""
+
+REPORT_PROMPT = """You are a cybersecurity assistant. A command just ran on a live Kali Linux shell.
+Report the result concisely in plain text.
+
+Rules:
+- For file/folder creation: confirm what was created and where.
+- For scan results: state the key findings (ports, emails, vulns, IPs) in 1-3 sentences.
+- For script execution: summarise what ran and the outcome.
+- For errors: state what failed and why in one line.
+- Never say "the output shows" or "the command returned".
+- Never repeat the command.
+- Only use bullet lists if there are 5+ distinct items."""
 
 TOOL_CALL_RE = re.compile(r'^TOOL_CALL:\s*(\{.+\})\s*$', re.MULTILINE)
 
@@ -60,6 +71,11 @@ Provider = Literal["openai", "anthropic", "ollama"]
 import re as _re
 
 _KEYWORD_TOOLS: list[tuple[_re.Pattern[str], str, str]] = [
+    # File / directory / script operations -> use bash
+    (_re.compile(r'\b(create|make|mkdir|write|generate|save).{0,30}(folder|directory|dir)\b', _re.I), "bash", "-c \"mkdir -p {target}\""),
+    (_re.compile(r'\b(create|write|generate|save).{0,30}(file|script|\.py|\.sh)\b', _re.I), "bash", "-c \"echo 'use LLM'\""),
+    (_re.compile(r'\b(run|execute|launch).{0,20}(script|\.py|\.sh|python)\b', _re.I), "python3", "{target}"),
+    (_re.compile(r'\bls\b|\blist files\b|\bshow files\b', _re.I), "bash", "-c \"ls -la\""),
     # System info
     (_re.compile(r'\b(hostname|name of (the )?host|what.{0,10}host)\b', _re.I), "hostname", ""),
     (_re.compile(r'\b(whoami|who am i|current user|running as)\b', _re.I), "whoami", ""),
@@ -323,9 +339,9 @@ async def stream_chat(
     """
     Main streaming generator. Yields SSE event dicts.
     Flow:
-      1. Keyword match → run tool → stream LLM report
-      2. LLM decision (accumulated silently) → TOOL_CALL → run tool → stream LLM report
-      3. No tool → stream LLM response directly
+      1. Keyword match -> run tool -> stream LLM report
+      2. LLM decision (accumulated silently) -> TOOL_CALL -> run tool -> stream LLM report
+      3. No tool -> stream LLM response directly
     TOOL_CALL tokens never reach the frontend.
     """
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]

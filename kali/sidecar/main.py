@@ -27,6 +27,12 @@ KNOWN_TOOLS = [
     "nmap", "nikto", "gobuster", "sqlmap", "hydra",
     "whois", "dnsrecon", "dnsenum", "theHarvester",
     "wfuzz", "whatweb", "hping3", "tcpdump", "masscan",
+    # Shell / scripting
+    "bash", "sh", "python3", "python", "perl", "ruby",
+    # File operations
+    "mkdir", "touch", "cp", "mv", "rm", "chmod", "chown",
+    "cat", "echo", "tee", "head", "tail", "grep", "find",
+    "ls", "stat", "file", "wc", "sort", "uniq", "awk", "sed",
     # File / network transfer
     "curl", "wget", "netcat", "nc", "dig", "ftp", "ssh",
     # Password / hash
@@ -43,7 +49,7 @@ KNOWN_TOOLS = [
 
 ALLOWED_TOOLS = KNOWN_TOOLS  # backward-compat alias
 
-MAX_ARGS_LENGTH = 500
+MAX_ARGS_LENGTH = 4000
 DEFAULT_TIMEOUT = 60
 MAX_TIMEOUT = 300
 
