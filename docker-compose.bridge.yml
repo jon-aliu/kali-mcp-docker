@@ -1,0 +1,59 @@
+# docker-compose.bridge.yml — macvlan LAN bridge overlay
+#
+# Gives the Kali container its own IP on your physical LAN so tools like
+# nmap, netdiscover, and arp-scan see real hosts (not Docker-NATed traffic).
+#
+# Usage:
+#   make bridge-up          # bring up full stack with LAN bridge enabled
+#   make bridge-down        # tear down (removes macvlan network too)
+#   make bridge-promisc     # Linux only: put host NIC in promiscuous mode
+#
+# Prerequisites:
+#   1. Copy the KALI LAN BRIDGE section from .env.example into your .env
+#      and set values to match your LAN.
+#   2. Linux host:
+#        sudo ip link set <KALI_BRIDGE_IFACE> promisc on
+#        (or run: make bridge-promisc)
+#   3. macOS / Docker Desktop:
+#        Docker Desktop runs in a Linux VM — the macvlan parent is the VM's
+#        virtual NIC, NOT your Mac's en0. Containers will NOT appear on your
+#        Mac's LAN. For true LAN bridging on macOS, run Docker on a Linux VM
+#        (UTM, VirtualBox, etc.) or deploy this stack on a Linux host.
+#
+# Required .env variables:
+#   KALI_BRIDGE_IFACE   host network interface (eth0, ens3, en0, …)
+#   KALI_LAN_SUBNET     e.g. 192.168.1.0/24
+#   KALI_LAN_GW         e.g. 192.168.1.1
+#   KALI_LAN_IP         static IP for the Kali container, e.g. 192.168.1.250
+#   KALI_IP_RANGE       range Docker may auto-assign from, e.g. 192.168.1.240/28
+
+networks:
+  # The base networks are defined in docker-compose.yml; declare them here
+  # only so Compose knows they exist in this overlay context.
+  kali-net:
+    external: false     # already defined in base file — Compose will merge
+
+  kali-macvlan:
+    driver: macvlan
+    driver_opts:
+      parent: "${KALI_BRIDGE_IFACE:-eth0}"
+    ipam:
+      driver: default
+      config:
+        - subnet:    "${KALI_LAN_SUBNET:-192.168.1.0/24}"
+          gateway:   "${KALI_LAN_GW:-192.168.1.1}"
+          ip_range:  "${KALI_IP_RANGE:-192.168.1.240/28}"
+
+services:
+  kali:
+    # Override networks: add macvlan alongside the existing kali-net
+    networks:
+      kali-net: {}
+      kali-macvlan:
+        ipv4_address: "${KALI_LAN_IP:-192.168.1.250}"
+    # Promiscuous mode and raw sockets are needed for LAN-level scanning
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BIND_SERVICE
+      - SYS_PTRACE      # allows strace-based debugging over LAN

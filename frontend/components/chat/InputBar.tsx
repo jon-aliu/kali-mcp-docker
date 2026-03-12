@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, KeyboardEvent, useEffect } from "react";
-import { Send, Square, Paperclip, Mic } from "lucide-react";
+import { Send, Square } from "lucide-react";
 import { useChatStore } from "@/store/chat";
 
 interface InputBarProps {
@@ -21,6 +21,7 @@ export function InputBar({ suggestion, onSuggestionConsumed }: InputBarProps) {
   const historyRef = useRef<string[]>([]);
   const historyIdxRef = useRef<number>(-1);
   const savedDraftRef = useRef<string>("");
+  const [historyPos, setHistoryPos] = useState<{ idx: number; total: number } | null>(null);
 
   // Consume suggestion prop
   useEffect(() => {
@@ -55,9 +56,14 @@ export function InputBar({ suggestion, onSuggestionConsumed }: InputBarProps) {
       return;
     }
 
-    if (e.key === "ArrowUp" && !e.shiftKey && !value) {
+    // Arrow-up: enter history mode when empty, or keep cycling when already in history mode
+    if (e.key === "ArrowUp" && !e.shiftKey) {
       const sentMsgs = historyRef.current;
       if (sentMsgs.length === 0) return;
+      // Only enter history mode from a clean (empty or single-line) state
+      const isMultiLine = value.includes("\n");
+      const inHistoryMode = historyIdxRef.current !== -1;
+      if (!inHistoryMode && (value !== "" || isMultiLine)) return;
       e.preventDefault();
       if (historyIdxRef.current === -1) {
         savedDraftRef.current = value;
@@ -67,6 +73,7 @@ export function InputBar({ suggestion, onSuggestionConsumed }: InputBarProps) {
       }
       const entry = sentMsgs[historyIdxRef.current];
       setValue(entry);
+      setHistoryPos({ idx: historyIdxRef.current, total: sentMsgs.length });
       requestAnimationFrame(() => {
         resize();
         const ta = textareaRef.current;
@@ -75,6 +82,7 @@ export function InputBar({ suggestion, onSuggestionConsumed }: InputBarProps) {
       return;
     }
 
+    // Arrow-down: cycle forward, restore draft at the end
     if (e.key === "ArrowDown" && !e.shiftKey && historyIdxRef.current !== -1) {
       e.preventDefault();
       const sentMsgs = historyRef.current;
@@ -82,17 +90,35 @@ export function InputBar({ suggestion, onSuggestionConsumed }: InputBarProps) {
         historyIdxRef.current += 1;
         const entry = sentMsgs[historyIdxRef.current];
         setValue(entry);
-        requestAnimationFrame(resize);
+        setHistoryPos({ idx: historyIdxRef.current, total: sentMsgs.length });
+        requestAnimationFrame(() => {
+          resize();
+          const ta = textareaRef.current;
+          if (ta) ta.setSelectionRange(entry.length, entry.length);
+        });
       } else {
+        // Reached end — restore unsent draft
         historyIdxRef.current = -1;
+        setHistoryPos(null);
         setValue(savedDraftRef.current);
         requestAnimationFrame(resize);
       }
       return;
     }
 
-    if (e.key !== "Shift" && e.key !== "ArrowUp" && e.key !== "ArrowDown") {
+    // Escape while in history mode → restore draft
+    if (e.key === "Escape" && historyIdxRef.current !== -1) {
       historyIdxRef.current = -1;
+      setHistoryPos(null);
+      setValue(savedDraftRef.current);
+      requestAnimationFrame(resize);
+      return;
+    }
+
+    // Any other printable key exits history mode
+    if (!["Shift", "Control", "Alt", "Meta", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      historyIdxRef.current = -1;
+      setHistoryPos(null);
     }
   };
 
@@ -102,6 +128,7 @@ export function InputBar({ suggestion, onSuggestionConsumed }: InputBarProps) {
     historyRef.current.push(text);
     historyIdxRef.current = -1;
     savedDraftRef.current = "";
+    setHistoryPos(null);
     setValue("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     sendMessage(text);
@@ -161,9 +188,20 @@ export function InputBar({ suggestion, onSuggestionConsumed }: InputBarProps) {
           </div>
         </div>
 
-        <p className="text-center text-[10px] text-text-dim mt-1.5">
-          KaliMCP can make mistakes. Use responsibly and only on systems you own or have permission to test.
-        </p>
+        <div className="flex items-center justify-between mt-1.5 px-1">
+          {historyPos ? (
+            <span className="text-[10px] text-accent font-mono">
+              ↑↓ history {historyPos.total - historyPos.idx}/{historyPos.total} · Esc to cancel
+            </span>
+          ) : (
+            <span className="text-[10px] text-text-dim">
+              ↑ history · Shift+Enter newline
+            </span>
+          )}
+          <p className="text-[10px] text-text-dim">
+            KaliMCP can make mistakes. Use responsibly.
+          </p>
+        </div>
       </div>
     </div>
   );

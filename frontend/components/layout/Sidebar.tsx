@@ -9,12 +9,9 @@ import {
   Trash2,
   Search,
   User,
-  Settings,
   Shield,
   LogOut,
-  ChevronDown,
   PenLine,
-  Check,
   X,
   Menu,
   Bot,
@@ -170,7 +167,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     stopStreaming();
     const providerConf = PROVIDER_CONFIGS.find((p) => p.id === provider)!;
     const model = models[provider] ?? providerConf.models[0].id;
-    const conv = newConversation(provider, model);
+    newConversation(provider, model);
     router.push("/chat");
     // close mobile sidebar
     onClose();

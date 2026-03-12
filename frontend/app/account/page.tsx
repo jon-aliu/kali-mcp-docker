@@ -3,7 +3,6 @@
 import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
-  User,
   Key,
   Shield,
   Trash2,
@@ -12,7 +11,6 @@ import {
   Eye,
   EyeOff,
   Bot,
-  ChevronRight,
 } from "lucide-react";
 import { isAuthenticated } from "@/lib/auth";
 import { api, type UserOut } from "@/lib/api";

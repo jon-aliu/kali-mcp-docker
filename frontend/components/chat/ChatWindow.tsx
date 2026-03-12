@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { useChatStore } from "@/store/chat";
 import { useConversationsStore } from "@/store/conversations";
 import { MessageBubble } from "./MessageBubble";
-import { Bot, Zap } from "lucide-react";
+import { Bot } from "lucide-react";
 
 function TypingIndicator() {
   return (

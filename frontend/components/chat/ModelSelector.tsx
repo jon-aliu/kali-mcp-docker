@@ -9,7 +9,6 @@ import {
   X,
   Terminal,
   Cpu,
-  Info,
   Key,
 } from "lucide-react";
 import { useProviderStore, PROVIDER_CONFIGS, type Provider } from "@/store/provider";
@@ -122,7 +121,7 @@ export function ModelSelector() {
                   <div className="px-3 pb-3 grid grid-cols-2 gap-1.5">
                     {prov.models.map((m) => {
                       const sel = selectedModel === m.id;
-                      const isCustom = prov.id === "ollama" && ollamaCustomModel && sel;
+
                       return (
                         <button
                           key={m.id}

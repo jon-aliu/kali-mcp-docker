@@ -61,6 +61,7 @@ class ExecuteRequest(BaseModel):
     tool: str
     args: str
     timeout: Optional[int] = DEFAULT_TIMEOUT
+    sudo: bool = False
 
     @field_validator("tool")
     @classmethod
@@ -189,6 +190,9 @@ async def execute(request: ExecuteRequest) -> ExecuteResponse:
         )
 
     cmd = [request.tool] + parsed_args
+    # Prepend sudo -E when requested (and tool isn't already sudo)
+    if request.sudo and request.tool != "sudo":
+        cmd = ["sudo", "-E"] + cmd
     start = time.monotonic()
 
     try:

@@ -1,9 +1,11 @@
 """
-Admin router — user management (admin-only endpoints).
+Admin router — user management + system config (admin-only endpoints).
 GET  /api/admin/users        - list all users
 POST /api/admin/users        - create a new user
 PATCH /api/admin/users/{id}  - toggle is_active / is_admin
 DELETE /api/admin/users/{id} - hard-delete a user
+GET  /api/admin/config       - get system config
+PATCH /api/admin/config      - update system config
 """
 
 import structlog
@@ -12,10 +14,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
+from pydantic import BaseModel as PydanticBaseModel
+from typing import Optional
+
 from db.postgres import get_session, UserORM
+from db.redis import get_redis
 from middleware.auth import require_auth
 from models.user import UserCreate, UserOut
 from routers.auth import hash_password
+
+
+class SystemConfig(PydanticBaseModel):
+    sudo_mode: bool = False
+
+
+class SystemConfigUpdate(PydanticBaseModel):
+    sudo_mode: Optional[bool] = None
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -140,3 +154,36 @@ async def delete_user(
     await session.delete(target)
     await session.commit()
     logger.info("admin_deleted_user", admin_id=request.state.user["sub"], target_id=str(user_id))
+
+
+# ---------------------------------------------------------------------------
+# System config (sudo_mode, etc.) — stored in Redis
+# ---------------------------------------------------------------------------
+
+@router.get("/config", response_model=SystemConfig)
+async def get_config(
+    request: Request,
+    _: None = Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
+) -> SystemConfig:
+    await _get_admin_user(request, session)
+    redis = await get_redis()
+    sudo_raw = await redis.get("config:sudo_mode")
+    sudo_mode = sudo_raw in (b"1", "1")
+    return SystemConfig(sudo_mode=sudo_mode)
+
+
+@router.patch("/config", response_model=SystemConfig)
+async def update_config(
+    body: SystemConfigUpdate,
+    request: Request,
+    _: None = Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
+) -> SystemConfig:
+    await _get_admin_user(request, session)
+    redis = await get_redis()
+    if body.sudo_mode is not None:
+        await redis.set("config:sudo_mode", "1" if body.sudo_mode else "0")
+        logger.info("admin_config_update", admin_id=request.state.user["sub"], sudo_mode=body.sudo_mode)
+    sudo_raw = await redis.get("config:sudo_mode")
+    return SystemConfig(sudo_mode=sudo_raw in (b"1", "1"))

@@ -24,13 +24,16 @@ export default function ChatPage() {
   const [terminalExpanded, setTerminalExpanded] = useState(false);
   const [suggestion, setSuggestion] = useState("");
 
-  const { activeId, conversations, newConversation } = useConversationsStore();
+  const { activeId, conversations, newConversation, syncFromServer, loadMessages } = useConversationsStore();
   const { provider, models } = useProviderStore();
 
   useEffect(() => {
     if (!isAuthenticated()) {
       router.replace("/login");
+      return;
     }
+    // Sync conversation list from DB on every page load
+    syncFromServer();
   }, [router]);
 
   // Ensure there's always an active conversation
@@ -39,6 +42,11 @@ export default function ChatPage() {
       newConversation(provider, models[provider]);
     }
   }, []);
+
+  // Load messages from DB when switching to a conversation with no local messages
+  useEffect(() => {
+    if (activeId) loadMessages(activeId);
+  }, [activeId]);
 
   const handleSuggestion = useCallback((text: string) => {
     setSuggestion(text);

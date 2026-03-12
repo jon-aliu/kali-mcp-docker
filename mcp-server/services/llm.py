@@ -11,7 +11,7 @@ import structlog
 import httpx
 
 from config import settings
-from services.kali import execute_tool
+from services.kali import execute_tool, get_sudo_mode
 from services.session import save_message
 from services.streaming import (
     token_event,
@@ -65,68 +65,9 @@ TOOL_CALL_RE = re.compile(r'^TOOL_CALL:\s*(\{.+\})\s*$', re.MULTILINE)
 
 Provider = Literal["openai", "anthropic", "ollama", "google"]
 
-# ---------------------------------------------------------------------------
-# Keyword → tool mapping (catches direct tool requests and common queries)
-# ---------------------------------------------------------------------------
-import re as _re
-
-_KEYWORD_TOOLS: list[tuple[_re.Pattern[str], str, str]] = [
-    # File / directory / script operations -> use bash
-    (_re.compile(r'\b(create|make|mkdir|write|generate|save).{0,30}(folder|directory|dir)\b', _re.I), "bash", "-c \"mkdir -p {target}\""),
-    (_re.compile(r'\b(create|write|generate|save).{0,30}(file|script|\.py|\.sh)\b', _re.I), "bash", "-c \"echo 'use LLM'\""),
-    (_re.compile(r'\b(run|execute|launch).{0,20}(script|\.py|\.sh|python)\b', _re.I), "python3", "{target}"),
-    (_re.compile(r'\bls\b|\blist files\b|\bshow files\b', _re.I), "bash", "-c \"ls -la\""),
-    # System info
-    (_re.compile(r'\b(hostname|name of (the )?host|what.{0,10}host)\b', _re.I), "hostname", ""),
-    (_re.compile(r'\b(whoami|who am i|current user|running as)\b', _re.I), "whoami", ""),
-    (_re.compile(r'\b(what (user )?id|show id|my uid)\b', _re.I), "id", ""),
-    (_re.compile(r'\b(ip address|my ip|show ip|ip addr|network interface)\b', _re.I), "ip", "addr show"),
-    (_re.compile(r'\bifconfig\b', _re.I), "ifconfig", ""),
-    (_re.compile(r'\b(what os|operating system|uname|kernel|linux version)\b', _re.I), "uname", "-a"),
-    (_re.compile(r'\b(running processes|process list|ps aux|show processes)\b', _re.I), "ps", "aux"),
-    (_re.compile(r'\b(open ports|listening ports|show ports|ss |sockets)\b', _re.I), "ss", "-tlnp"),
-    (_re.compile(r'\bnetstat\b', _re.I), "netstat", "-tulnp"),
-    # Network recon
-    (_re.compile(r'\b(traceroute|trace route|hops?.{0,10}to)\b', _re.I), "traceroute", "-m 15 {target}"),
-    (_re.compile(r'\b(ping|reachable)\b.{0,30}([\w.-]+\.[\w]+|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', _re.I), "ping", "-c 4 {target}"),
-    (_re.compile(r'\b(dns|resolve|lookup|dig)\b.{0,30}([\w.-]+\.[\w]+)', _re.I), "dig", "+short {target}"),
-    (_re.compile(r'\bwhois\b', _re.I), "whois", "{target}"),
-    (_re.compile(r'\bnmap\b', _re.I), "nmap", "-sV {target}"),
-    # Web
-    (_re.compile(r'\b(nikto|web vuln|scan (the )?web)\b', _re.I), "nikto", "-h {target}"),
-    (_re.compile(r'\bgobuster\b', _re.I), "gobuster", "dir -u http://{target} -w /usr/share/wordlists/dirb/common.txt"),
-    (_re.compile(r'\bwhatweb\b', _re.I), "whatweb", "{target}"),
-    (_re.compile(r'\b(curl|fetch|get http)\b', _re.I), "curl", "-s {target}"),
-    (_re.compile(r'\bwget\b', _re.I), "wget", "-q -O- {target}"),
-    # OSINT / DNS
-    (_re.compile(r'\bdnsrecon\b', _re.I), "dnsrecon", "-d {target}"),
-    (_re.compile(r'\bdnsenum\b', _re.I), "dnsenum", "{target}"),
-    (_re.compile(r'\b(theharvester|harvester|find emails?|emails?.{0,10}from)\b', _re.I), "theHarvester", "-d {target} -b crtsh,hackertarget,dnsdumpster"),
-    # Advanced
-    (_re.compile(r'\bsqlmap\b', _re.I), "sqlmap", "-u {target} --batch"),
-    (_re.compile(r'\bhydra\b', _re.I), "hydra", "{target}"),
-    (_re.compile(r'\b(hping3|hping)\b', _re.I), "hping3", "-S {target}"),
-    (_re.compile(r'\b(hashcat|crack hash)\b', _re.I), "hashcat", "{target}"),
-    (_re.compile(r'\bjohn\b', _re.I), "john", "{target}"),
-    (_re.compile(r'\bwfuzz\b', _re.I), "wfuzz", "{target}"),
-]
-
-def _extract_target(text: str) -> str:
-    """Pull the last IP or hostname out of a message."""
-    m = _re.search(r'(\d{1,3}(?:\.\d{1,3}){3}|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})', text)
-    return m.group(1) if m else ""
-
-def _keyword_tool(user_message: str) -> tuple[str, str] | None:
-    """Return (tool, args) if the message matches a known pattern, else None."""
-    for pattern, tool, args_tpl in _KEYWORD_TOOLS:
-        if pattern.search(user_message):
-            target = _extract_target(user_message)
-            args = args_tpl.replace("{target}", target) if target else args_tpl.replace(" {target}", "").replace("{target}", "")
-            return tool, args.strip()
-    return None
-
 
 # Context question patterns — user asking about results of a previous tool run
+import re as _re
 _CONTEXT_Q = _re.compile(
     r'\b(which|what|any|were|are there|show|list|found|results?|did.{0,10}find|tell me)\b',
     _re.I,
@@ -392,13 +333,18 @@ async def stream_chat(
 
     await save_message(conversation_id, {"role": "user", "content": user_message})
 
+    # Read sudo_mode from Redis once per request
+    sudo_mode = await get_sudo_mode()
+    if sudo_mode:
+        messages[0] = {"role": "system", "content": SYSTEM_PROMPT_SUDO}
+
     tokens_used = 0
     full_response = ""
 
     async def _run_tool_and_report(tool_name: str, tool_args: str) -> AsyncGenerator[dict, None]:
         """Run a tool and stream a structured report of its output."""
         yield tool_start_event(tool_name, tool_args)
-        result = await execute_tool(tool_name, tool_args, timeout=120)
+        result = await execute_tool(tool_name, tool_args, timeout=120, sudo=sudo_mode)
         yield tool_output_event(
             result["stdout"], result["stderr"],
             result["exit_code"], result["duration"],
@@ -419,22 +365,12 @@ async def stream_chat(
         await save_message(conversation_id, {
             "role": "assistant",
             "content": f'TOOL_CALL: {{"tool": "{tool_name}", "args": "{tool_args}"}}\n\n{report}',
-        })
+        }, user_id)
         yield done_event(conversation_id, report_tokens)
 
     try:
         # ------------------------------------------------------------------
-        # Fast path: keyword → run tool immediately (bypasses model format)
-        # ------------------------------------------------------------------
-        kw = _keyword_tool(user_message)
-        if kw:
-            tool_name, tool_args = kw
-            async for event in _run_tool_and_report(tool_name, tool_args):
-                yield event
-            return
-
-        # ------------------------------------------------------------------
-        # Normal path: accumulate LLM decision silently, then act
+        # LLM decides: accumulate response silently, then act on TOOL_CALL
         # ------------------------------------------------------------------
         decision = ""
         async for token in _pick_stream(provider, api_key, messages, model):
@@ -475,7 +411,7 @@ async def stream_chat(
                 tokens_used += 1
                 yield token_event(tok)
 
-        await save_message(conversation_id, {"role": "assistant", "content": full_response.strip()})
+        await save_message(conversation_id, {"role": "assistant", "content": full_response.strip()}, user_id)
         yield done_event(conversation_id, tokens_used)
 
     except Exception as exc:

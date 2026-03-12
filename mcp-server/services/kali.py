@@ -41,11 +41,22 @@ async def _post_with_retry(url: str, payload: dict) -> dict:
     raise RuntimeError(f"Kali sidecar unreachable after {MAX_RETRIES} attempts: {last_exc}")
 
 
-async def execute_tool(tool: str, args: str, timeout: int = 60) -> dict:
+async def get_sudo_mode() -> bool:
+    """Read the global sudo_mode flag from Redis."""
+    try:
+        from db.redis import get_redis
+        redis = await get_redis()
+        val = await redis.get("config:sudo_mode")
+        return val in (b"1", "1")
+    except Exception:
+        return False
+
+
+async def execute_tool(tool: str, args: str, timeout: int = 60, sudo: bool = False) -> dict:
     """Execute a tool on the kali sidecar API."""
     url = f"{settings.kali_sidecar_url}/execute"
-    payload = {"tool": tool, "args": args, "timeout": timeout}
-    logger.info("kali_execute", tool=tool, args=args)
+    payload = {"tool": tool, "args": args, "timeout": timeout, "sudo": sudo}
+    logger.info("kali_execute", tool=tool, args=args, sudo=sudo)
     return await _post_with_retry(url, payload)
 
 

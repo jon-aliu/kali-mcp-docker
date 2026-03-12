@@ -7,15 +7,14 @@ import {
   UserPlus,
   Trash2,
   Check,
-  X,
   AlertCircle,
   Search,
-  ChevronDown,
   Users,
-  Bot,
   RefreshCw,
   Eye,
   EyeOff,
+  Terminal,
+  Lock,
 } from "lucide-react";
 import { isAuthenticated } from "@/lib/auth";
 import { api, type UserOut } from "@/lib/api";
@@ -172,6 +171,8 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [sudoMode, setSudoMode] = useState(false);
+  const [sudoLoading, setSudoLoading] = useState(false);
 
   // Create user form
   const [showCreate, setShowCreate] = useState(false);
@@ -187,9 +188,14 @@ export default function AdminPage() {
     setLoading(true);
     setError("");
     try {
-      const [usersData, meData] = await Promise.all([api.admin.listUsers(), api.auth.me()]);
+      const [usersData, meData, configData] = await Promise.all([
+        api.admin.listUsers(),
+        api.auth.me(),
+        api.admin.getConfig(),
+      ]);
       setUsers(usersData);
       setCurrentUser(meData);
+      setSudoMode(configData.sudo_mode);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load";
       if (msg.includes("403") || msg.toLowerCase().includes("admin")) {
@@ -259,6 +265,18 @@ export default function AdminPage() {
     }
   };
 
+  const handleSudoToggle = async (enabled: boolean) => {
+    setSudoLoading(true);
+    try {
+      const updated = await api.admin.updateConfig({ sudo_mode: enabled });
+      setSudoMode(updated.sudo_mode);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Config update failed");
+    } finally {
+      setSudoLoading(false);
+    }
+  };
+
   const filtered = search
     ? users.filter(
         (u) =>
@@ -298,6 +316,50 @@ export default function AdminPage() {
                 {error}
               </div>
             )}
+
+            {/* System Settings */}
+            <div className="bg-surface border border-border rounded-2xl overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+                <Terminal size={13} className="text-text-muted" />
+                <h2 className="text-sm font-semibold text-text">System Settings</h2>
+              </div>
+              <div className="px-4 py-4 space-y-3">
+                {/* Sudo mode toggle */}
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-warning/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Lock size={13} className="text-warning" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-text">Run commands as sudo</p>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        Prepends <code className="font-mono bg-background px-1 rounded">sudo -E</code> to every command the AI executes.
+                        Enables privileged operations like <code className="font-mono bg-background px-1 rounded">apt-get</code>, network config, and system tools.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleSudoToggle(!sudoMode)}
+                    disabled={sudoLoading}
+                    aria-label="Toggle sudo mode"
+                    className={`relative flex-shrink-0 w-11 h-6 rounded-full transition-colors duration-200
+                      ${sudoMode ? "bg-warning" : "bg-border"}
+                      ${sudoLoading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    <span
+                      className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200
+                        ${sudoMode ? "translate-x-6" : "translate-x-1"}`}
+                    />
+                  </button>
+                </div>
+                {sudoMode && (
+                  <div className="flex items-center gap-2 text-xs text-warning bg-warning/10 border border-warning/20 px-3 py-2 rounded-xl">
+                    <Lock size={11} />
+                    Sudo mode is active — all AI-executed commands run with elevated privileges.
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* Stats */}
             <div className="grid grid-cols-3 gap-4">

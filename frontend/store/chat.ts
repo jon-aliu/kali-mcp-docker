@@ -58,16 +58,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
 
     const currentMessages = conv.messages;
-    // Auto-generate title from first message
-    const newTitle =
-      conv.autoTitle && currentMessages.length === 0
-        ? titleFromMessage(text)
-        : conv.title;
+    // Auto-generate title from first message and sync to DB
+    const isFirstMessage = conv.autoTitle && currentMessages.length === 0;
+    const newTitle = isFirstMessage ? titleFromMessage(text) : conv.title;
+
+    if (isFirstMessage) {
+      // renameConversation handles both local update + DB sync
+      convStore.renameConversation(convId, newTitle);
+    }
 
     convStore.updateConversation(convId, {
       messages: [...currentMessages, userMsg],
-      title: newTitle,
-      autoTitle: conv.autoTitle && currentMessages.length > 0 ? conv.autoTitle : false,
     });
 
     set({ isStreaming: true });

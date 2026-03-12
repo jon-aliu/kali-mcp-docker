@@ -50,6 +50,26 @@ export interface TokenResponse {
   token_type: string;
 }
 
+export interface ConversationOut {
+  id: string;
+  title: string;
+  provider?: string;
+  model?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessageOut {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
+}
+
+export interface SystemConfig {
+  sudo_mode: boolean;
+}
+
 export const api = {
   auth: {
     register: (data: { username: string; email: string; password: string }) =>
@@ -95,6 +115,27 @@ export const api = {
 
     deleteUser: (id: string) =>
       request<void>("DELETE", `/api/admin/users/${id}`),
+
+    getConfig: () => request<SystemConfig>("GET", "/api/admin/config"),
+
+    updateConfig: (data: Partial<SystemConfig>) =>
+      request<SystemConfig>("PATCH", "/api/admin/config", data),
+  },
+
+  conversations: {
+    list: () => request<ConversationOut[]>("GET", "/api/conversations/"),
+
+    create: (data: { id: string; title: string; provider?: string; model?: string }) =>
+      request<ConversationOut>("POST", "/api/conversations/", data),
+
+    rename: (id: string, title: string) =>
+      request<ConversationOut>("PATCH", `/api/conversations/${id}`, { title }),
+
+    delete: (id: string) =>
+      request<void>("DELETE", `/api/conversations/${id}`),
+
+    getMessages: (id: string) =>
+      request<MessageOut[]>("GET", `/api/conversations/${id}/messages`),
   },
 };
 
