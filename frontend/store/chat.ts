@@ -19,9 +19,11 @@ interface ChatState {
   messages: Message[];
   isStreaming: boolean;
   conversationId: string;
+  _abortController: AbortController | null;
   addMessage: (msg: Message) => void;
   appendToken: (token: string) => void;
   setStreaming: (v: boolean) => void;
+  stopStreaming: () => void;
   sendMessage: (text: string) => Promise<void>;
 }
 
@@ -29,6 +31,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isStreaming: false,
   conversationId: crypto.randomUUID(),
+  _abortController: null,
+
+  stopStreaming: () => {
+    get()._abortController?.abort();
+    set({ isStreaming: false, _abortController: null });
+  },
 
   addMessage: (msg) =>
     set((s) => ({ messages: [...s.messages, msg] })),
@@ -64,6 +72,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
 
     setStreaming(true);
+    const controller = new AbortController();
+    set({ _abortController: controller });
 
     try {
       await streamChat(
@@ -94,7 +104,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               });
             }
           },
-          onDone: () => setStreaming(false),
+          onDone: () => set({ isStreaming: false, _abortController: null }),
           onError: (msg) => {
             addMessage({
               id: crypto.randomUUID(),
@@ -102,12 +112,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
               content: `Error: ${msg}`,
               timestamp: new Date(),
             });
-            setStreaming(false);
+            set({ isStreaming: false, _abortController: null });
           },
-        }
+        },
+        controller.signal
       );
-    } catch {
-      setStreaming(false);
+    } catch (e) {
+      // AbortError is expected when user clicks Stop
+      if (e instanceof Error && e.name !== "AbortError") {
+        addMessage({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "Response stopped.",
+          timestamp: new Date(),
+        });
+      }
+      set({ isStreaming: false, _abortController: null });
     }
   },
 }));

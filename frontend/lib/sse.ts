@@ -26,10 +26,12 @@ export interface SSEHandlers {
 
 export async function streamChat(
   request: ChatRequest,
-  handlers: SSEHandlers
+  handlers: SSEHandlers,
+  signal?: AbortSignal
 ): Promise<void> {
   const token = getToken();
   const response = await fetch("/api/chat", {
+    signal,
     method: "POST",
     headers: {
       "Content-Type": "application/json",
