@@ -16,14 +16,23 @@ BASE_BACKOFF = 1.0  # seconds
 
 
 async def _post_with_retry(url: str, payload: dict) -> dict:
-    """POST to kali sidecar with exponential backoff retry."""
+    """POST to kali sidecar with exponential backoff retry.
+    4xx errors (e.g. 422 bad tool name) are not retried — they are raised immediately.
+    Only network errors and 5xx responses trigger the retry loop.
+    """
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt in range(MAX_RETRIES):
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(url, json=payload)
-                response.raise_for_status()
+                # Don't retry client errors — surface them immediately
+                if 400 <= response.status_code < 500:
+                    detail = response.json().get("detail", response.text)
+                    raise RuntimeError(f"Tool error ({response.status_code}): {detail}")
+                response.raise_for_status()  # 5xx  
                 return response.json()
+        except RuntimeError:
+            raise  # immediately propagate 4xx errors
         except (httpx.HTTPError, httpx.ConnectError) as exc:
             last_exc = exc
             wait = BASE_BACKOFF * (2 ** attempt)

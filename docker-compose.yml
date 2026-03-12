@@ -105,6 +105,13 @@ services:
     networks:
       - kali-net
       - app-net
+    # Needs raw-socket capabilities so nmap SYN scans, ping, hping3, etc. work
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BIND_SERVICE
+    cap_drop:
+      - ALL
     depends_on:
       kali:
         condition: service_started
@@ -112,7 +119,8 @@ services:
       test:     ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 15s
       timeout:  5s
-      retries:  3
+      retries:  5
+      start_period: 30s
 
   # -------------------------------------------------------------------------
   # Ollama — local LLM inference (llama3, mistral, etc.)

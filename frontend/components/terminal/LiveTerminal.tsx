@@ -1,20 +1,17 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { X, TerminalSquare, Maximize2, Minimize2 } from "lucide-react";
 import { getToken } from "@/lib/auth";
 
 interface LiveTerminalProps {
   open: boolean;
   onClose: () => void;
+  onExpand?: () => void;
+  expanded?: boolean;
 }
 
-export function LiveTerminal({ open, onClose }: LiveTerminalProps) {
+export function LiveTerminal({ open, onClose, onExpand, expanded }: LiveTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const termRef = useRef<any>(null);
@@ -59,7 +56,9 @@ export function LiveTerminal({ open, onClose }: LiveTerminalProps) {
 
       const token = getToken();
       const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const wsHost = window.location.host;
+      // Connect directly to mcp-server (port 8000) — Next.js HTTP proxy
+      // cannot upgrade WebSocket connections.
+      const wsHost = `${window.location.hostname}:8000`;
       const ws = new WebSocket(
         `${wsProtocol}://${wsHost}/api/terminal?token=${token}`
       );
@@ -108,20 +107,41 @@ export function LiveTerminal({ open, onClose }: LiveTerminalProps) {
     }
   }, [open]);
 
+  if (!open) return null;
+
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-5xl h-[80vh] flex flex-col bg-[#0d0d0d] border-border p-0">
-        <DialogHeader className="px-4 py-2 border-b border-border">
-          <DialogTitle className="text-accent font-mono text-sm">
-            Kali Linux Terminal
-          </DialogTitle>
-        </DialogHeader>
-        <div
-          ref={containerRef}
-          className="flex-1 overflow-hidden p-2"
-          style={{ backgroundColor: "#0d0d0d" }}
-        />
-      </DialogContent>
-    </Dialog>
+    <div className="flex flex-col h-full bg-[#0d0d0d] border-r border-border overflow-hidden">
+      {/* Panel header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-surface flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <TerminalSquare size={14} className="text-accent" />
+          <span className="font-mono text-xs text-accent">Kali Linux</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {onExpand && (
+            <button
+              onClick={onExpand}
+              className="p-1 rounded hover:bg-border/40 text-text/50 hover:text-text transition-colors"
+              title={expanded ? "Shrink panel" : "Expand panel"}
+            >
+              {expanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="p-1 rounded hover:bg-border/40 text-text/50 hover:text-text transition-colors"
+            title="Close terminal"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      </div>
+      {/* xterm container */}
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-hidden p-1"
+        style={{ backgroundColor: "#0d0d0d" }}
+      />
+    </div>
   );
 }

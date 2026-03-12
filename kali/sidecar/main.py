@@ -18,11 +18,18 @@ from pydantic import BaseModel, field_validator
 # ---------------------------------------------------------------------------
 
 ALLOWED_TOOLS = [
+    # Reconnaissance
     "nmap", "nikto", "gobuster", "sqlmap", "hydra",
     "whois", "dnsrecon", "dnsenum", "theHarvester",
     "wfuzz", "whatweb", "hping3", "tcpdump",
-    "curl", "wget", "john", "hashcat",
-    "netcat", "nc", "dig",
+    # File / network transfer
+    "curl", "wget", "netcat", "nc", "dig",
+    # Password / hash
+    "john", "hashcat",
+    # System / network info
+    "hostname", "whoami", "id", "cat", "ls",
+    "ip", "ifconfig", "ss", "ping", "traceroute",
+    "uname", "ps", "netstat",
 ]
 
 MAX_ARGS_LENGTH = 500
@@ -201,7 +208,11 @@ async def terminal(websocket: WebSocket) -> None:
             proc.kill()
         except ProcessLookupError:
             pass
-        await websocket.close()
+        # Guard against double-close (connection may already be closed)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
