@@ -25,29 +25,28 @@ logger = structlog.get_logger()
 
 SYSTEM_PROMPT = """You are KaliMCP, a cybersecurity assistant with a live Kali Linux shell.
 
-RULES — follow exactly:
-1. When the user asks to run a tool or needs live data → IMMEDIATELY emit TOOL_CALL. No preamble, no explanation.
-2. NEVER say "I will run", "Let me", "Sure", or describe what you're about to do. Just do it.
-3. NEVER explain command output — the user reads it themselves.
-4. Simple greetings/questions with no tool needed → one-line reply only.
+Your ONLY job in this phase: decide whether to run a tool.
+- If the user wants live data, a scan, or any command → output EXACTLY one line:
+  TOOL_CALL: {"tool": "<name>", "args": "<args>"}
+- If it is a simple greeting or question with no tool needed → answer briefly in plain text.
+- NEVER say "I will...", "Let me...", "Sure" or any other preamble.
+- NEVER output TOOL_CALL plus extra text. TOOL_CALL must be the entire response.
 
-To run a tool write EXACTLY this (nothing else on that line):
-TOOL_CALL: {"tool": "<toolname>", "args": "<arguments>"}
+Available tools: hostname whoami id uname ps ip ifconfig ss netstat ping
+traceroute dig whois nmap curl wget nikto gobuster whatweb dnsrecon
+dnsenum theHarvester hydra john hashcat hping3 wfuzz sqlmap"""
 
-Available tools (any Kali tool can be used):
-  hostname whoami id uname ps ip ifconfig ss netstat
-  ping traceroute dig whois nmap curl wget
-  nikto gobuster whatweb dnsrecon dnsenum theHarvester
-  hydra john hashcat hping3 wfuzz sqlmap
+REPORT_PROMPT = """You are a cybersecurity analyst writing a concise report.
+You have just run a command and received its output.
+Write a clear, structured report of the findings.
 
-Examples:
-  "run nmap on 10.0.0.1" → TOOL_CALL: {"tool": "nmap", "args": "-sV 10.0.0.1"}
-  "show my IP"           → TOOL_CALL: {"tool": "ip", "args": "addr show"}
-  "trace to 8.8.8.8"    → TOOL_CALL: {"tool": "traceroute", "args": "-m 10 8.8.8.8"}
-  "harvest emails from example.com" → TOOL_CALL: {"tool": "theHarvester", "args": "-d example.com -b all"}
-
-- NEVER say you cannot run commands.
-- Run first, never ask permission."""
+Rules:
+- Use markdown: headers (##), bullet lists, bold for important values.
+- Never repeat the raw command or show it.
+- Never say "the output shows" or "the command returned" — just report facts.
+- If nothing interesting was found, say so in one line.
+- Group related findings under clear headings.
+- Highlight important values (open ports, IPs, emails, versions) in bold."""
 
 TOOL_CALL_RE = re.compile(r'^TOOL_CALL:\s*(\{.+\})\s*$', re.MULTILINE)
 
@@ -84,7 +83,7 @@ _KEYWORD_TOOLS: list[tuple[_re.Pattern[str], str, str]] = [
     # OSINT / DNS
     (_re.compile(r'\bdnsrecon\b', _re.I), "dnsrecon", "-d {target}"),
     (_re.compile(r'\bdnsenum\b', _re.I), "dnsenum", "{target}"),
-    (_re.compile(r'\b(theharvester|harvester|find emails?|emails?.{0,10}from)\b', _re.I), "theHarvester", "-d {target} -b google,bing"),
+    (_re.compile(r'\b(theharvester|harvester|find emails?|emails?.{0,10}from)\b', _re.I), "theHarvester", "-d {target} -b crtsh,hackertarget,dnsdumpster"),
     # Advanced
     (_re.compile(r'\bsqlmap\b', _re.I), "sqlmap", "-u {target} --batch"),
     (_re.compile(r'\bhydra\b', _re.I), "hydra", "{target}"),
@@ -179,8 +178,34 @@ def _answer_from_history(question: str, history: list[dict]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Per-provider streaming helpers
+# Report formatter — streams a structured LLM report from tool output
 # ---------------------------------------------------------------------------
+
+async def _stream_report(
+    tool_name: str,
+    tool_args: str,
+    stdout: str,
+    stderr: str,
+    exit_code: int,
+    provider: Provider,
+    api_key: str | None,
+    history: list[dict],
+) -> AsyncGenerator[str, None]:
+    """Ask the LLM to format tool output as a structured report and stream it."""
+    output_block = stdout if stdout.strip() else stderr if stderr.strip() else "(no output)"
+    messages = [
+        {"role": "system", "content": REPORT_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"Tool: {tool_name} {tool_args}\n"
+                f"Exit code: {exit_code}\n\n"
+                f"Output:\n{output_block[:8000]}"
+            ),
+        },
+    ]
+    async for token in _pick_stream(provider, api_key, messages):
+        yield token
 
 async def _stream_openai(messages: list[dict], api_key: str) -> AsyncGenerator[str, None]:
     """Stream tokens from OpenAI."""
@@ -295,8 +320,11 @@ async def stream_chat(
 ) -> AsyncGenerator[dict, None]:
     """
     Main streaming generator. Yields SSE event dicts.
-    1. Check keyword patterns → run tool directly (works even with small models).
-    2. Otherwise stream LLM and detect TOOL_CALL lines in the output.
+    Flow:
+      1. Keyword match → run tool → stream LLM report
+      2. LLM decision (accumulated silently) → TOOL_CALL → run tool → stream LLM report
+      3. No tool → stream LLM response directly
+    TOOL_CALL tokens never reach the frontend.
     """
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
@@ -307,92 +335,87 @@ async def stream_chat(
     tokens_used = 0
     full_response = ""
 
-    try:
-        # ------------------------------------------------------------------
-        # Context path: question about a previous tool result → answer directly
-        # ------------------------------------------------------------------
-        ctx = _answer_from_history(user_message, history)
-        if ctx:
-            for token in ctx.split():
-                tok = token + " "
-                full_response += tok
-                tokens_used += 1
-                yield token_event(tok)
-            await save_message(conversation_id, {"role": "assistant", "content": full_response.strip()})
-            yield done_event(conversation_id, tokens_used)
-            return
+    async def _run_tool_and_report(tool_name: str, tool_args: str) -> AsyncGenerator[dict, None]:
+        """Run a tool and stream a structured report of its output."""
+        yield tool_start_event(tool_name, tool_args)
+        result = await execute_tool(tool_name, tool_args, timeout=120)
+        yield tool_output_event(
+            result["stdout"], result["stderr"],
+            result["exit_code"], result["duration"],
+        )
 
+        # Stream a formatted report from the LLM
+        report = ""
+        report_tokens = 0
+        async for token in _stream_report(
+            tool_name, tool_args,
+            result["stdout"], result["stderr"], result["exit_code"],
+            provider, api_key, history,
+        ):
+            report += token
+            report_tokens += 1
+            yield token_event(token)
+
+        await save_message(conversation_id, {
+            "role": "assistant",
+            "content": f'TOOL_CALL: {{"tool": "{tool_name}", "args": "{tool_args}"}}\n\n{report}',
+        })
+        yield done_event(conversation_id, report_tokens)
+
+    try:
         # ------------------------------------------------------------------
         # Fast path: keyword → run tool immediately (bypasses model format)
         # ------------------------------------------------------------------
         kw = _keyword_tool(user_message)
         if kw:
             tool_name, tool_args = kw
-            yield tool_start_event(tool_name, tool_args)
-            result = await execute_tool(tool_name, tool_args, timeout=120)
-            yield tool_output_event(
-                result["stdout"], result["stderr"],
-                result["exit_code"], result["duration"],
-            )
-            await save_message(conversation_id, {
-                "role": "assistant",
-                "content": f'TOOL_CALL: {{"tool": "{tool_name}", "args": "{tool_args}"}}\nstdout:\n{result["stdout"]}',
-            })
-            yield done_event(conversation_id, tokens_used)
+            async for event in _run_tool_and_report(tool_name, tool_args):
+                yield event
             return
 
         # ------------------------------------------------------------------
-        # Normal path: LLM decides whether to call a tool
+        # Normal path: accumulate LLM decision silently, then act
         # ------------------------------------------------------------------
-        token_stream = _pick_stream(provider, api_key, messages)
+        decision = ""
+        async for token in _pick_stream(provider, api_key, messages):
+            decision += token
+            # Stop early once we have a complete TOOL_CALL line
+            if "\n" in decision and TOOL_CALL_RE.search(decision):
+                break
 
-        async for token in token_stream:
-            full_response += token
-            tokens_used += 1
-
-            match = TOOL_CALL_RE.search(full_response)
-            if match:
-                tool_json_str = match.group(1)
-                try:
-                    tool_data = json.loads(tool_json_str)
-                except json.JSONDecodeError:
-                    yield error_event("Invalid TOOL_CALL JSON", "tool_parse_error")
-                    break
-
-                yield tool_start_event(tool_data["tool"], tool_data.get("args", ""))
-
-                result = await execute_tool(
-                    tool_data["tool"],
-                    tool_data.get("args", ""),
-                    timeout=120,
-                )
-
-                yield tool_output_event(
-                    result["stdout"],
-                    result["stderr"],
-                    result["exit_code"],
-                    result["duration"],
-                )
-                await save_message(conversation_id, {
-                    "role": "assistant",
-                    "content": f'{full_response}\nstdout:\n{result["stdout"]}',
-                })
-                yield done_event(conversation_id, tokens_used)
+        match = TOOL_CALL_RE.search(decision)
+        if match:
+            try:
+                tool_data = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                yield error_event("Invalid TOOL_CALL JSON from LLM", "tool_parse_error")
                 return
-            else:
-                yield token_event(token)
 
-        # If the LLM returned nothing, fall back to context parser
-        if not full_response.strip():
+            tool_name = tool_data.get("tool", "")
+            tool_args = tool_data.get("args", "")
+            async for event in _run_tool_and_report(tool_name, tool_args):
+                yield event
+            return
+
+        # No tool — stream the plain LLM response
+        # `decision` already has the full response; yield it as tokens
+        if decision.strip():
+            for word in decision.split(" "):
+                tok = word + " "
+                full_response += tok
+                tokens_used += 1
+                yield token_event(tok)
+        else:
+            # LLM returned nothing — fallback context answer
             fallback = _answer_from_history(user_message, history)
-            if fallback:
-                for tok in fallback.split():
-                    t = tok + " "
-                    tokens_used += 1
-                    yield token_event(t)
-                full_response = fallback
+            text = fallback or "I'm not sure how to help with that."
+            for word in text.split(" "):
+                tok = word + " "
+                full_response += tok
+                tokens_used += 1
+                yield token_event(tok)
 
-        await save_message(conversation_id, {"role": "assistant", "content": full_response})
+        await save_message(conversation_id, {"role": "assistant", "content": full_response.strip()})
         yield done_event(conversation_id, tokens_used)
 
     except Exception as exc:
