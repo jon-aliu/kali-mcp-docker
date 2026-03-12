@@ -36,6 +36,7 @@ async def chat(
                 body.conversation_id,
                 provider=body.provider,
                 api_key=body.api_key,
+                model=body.model,
             )
         ):
             yield chunk

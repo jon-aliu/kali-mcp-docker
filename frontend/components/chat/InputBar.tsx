@@ -1,26 +1,44 @@
 "use client";
 
-import { useRef, useState, KeyboardEvent } from "react";
-import { Send, Square } from "lucide-react";
+import { useRef, useState, KeyboardEvent, useEffect } from "react";
+import { Send, Square, Paperclip, Mic } from "lucide-react";
 import { useChatStore } from "@/store/chat";
 
-export function InputBar() {
+interface InputBarProps {
+  /** Pre-fill the textarea (from suggestion chips) */
+  suggestion?: string;
+  onSuggestionConsumed?: () => void;
+}
+
+export function InputBar({ suggestion, onSuggestionConsumed }: InputBarProps) {
   const [value, setValue] = useState("");
   const isStreaming = useChatStore((s) => s.isStreaming);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // History: track submitted prompts and current position
+  // History
   const historyRef = useRef<string[]>([]);
   const historyIdxRef = useRef<number>(-1);
   const savedDraftRef = useRef<string>("");
+
+  // Consume suggestion prop
+  useEffect(() => {
+    if (suggestion) {
+      setValue(suggestion);
+      onSuggestionConsumed?.();
+      setTimeout(() => {
+        resize();
+        textareaRef.current?.focus();
+      }, 50);
+    }
+  }, [suggestion]);
 
   const resize = () => {
     const ta = textareaRef.current;
     if (ta) {
       ta.style.height = "auto";
-      const maxHeight = 24 * 5 + 24;
+      const maxHeight = 24 * 8 + 24;
       ta.style.height = `${Math.min(ta.scrollHeight, maxHeight)}px`;
     }
   };
@@ -37,13 +55,11 @@ export function InputBar() {
       return;
     }
 
-    // Arrow-up / down — cycle through sent user messages
-    if (e.key === "ArrowUp" && !e.shiftKey) {
+    if (e.key === "ArrowUp" && !e.shiftKey && !value) {
       const sentMsgs = historyRef.current;
       if (sentMsgs.length === 0) return;
       e.preventDefault();
       if (historyIdxRef.current === -1) {
-        // Save draft before navigating
         savedDraftRef.current = value;
         historyIdxRef.current = sentMsgs.length - 1;
       } else if (historyIdxRef.current > 0) {
@@ -59,21 +75,15 @@ export function InputBar() {
       return;
     }
 
-    if (e.key === "ArrowDown" && !e.shiftKey) {
-      if (historyIdxRef.current === -1) return;
+    if (e.key === "ArrowDown" && !e.shiftKey && historyIdxRef.current !== -1) {
       e.preventDefault();
       const sentMsgs = historyRef.current;
       if (historyIdxRef.current < sentMsgs.length - 1) {
         historyIdxRef.current += 1;
         const entry = sentMsgs[historyIdxRef.current];
         setValue(entry);
-        requestAnimationFrame(() => {
-          resize();
-          const ta = textareaRef.current;
-          if (ta) ta.setSelectionRange(entry.length, entry.length);
-        });
+        requestAnimationFrame(resize);
       } else {
-        // Back to draft
         historyIdxRef.current = -1;
         setValue(savedDraftRef.current);
         requestAnimationFrame(resize);
@@ -81,8 +91,7 @@ export function InputBar() {
       return;
     }
 
-    // Any other key resets history navigation
-    if (e.key !== "Shift") {
+    if (e.key !== "Shift" && e.key !== "ArrowUp" && e.key !== "ArrowDown") {
       historyIdxRef.current = -1;
     }
   };
@@ -98,14 +107,12 @@ export function InputBar() {
     sendMessage(text);
   };
 
-  const handleStop = () => {
-    stopStreaming();
-  };
-
   return (
-    <div className="border-t border-border bg-surface px-4 py-3">
-      <div className="flex gap-3 items-end max-w-4xl mx-auto">
-        <div className="flex-1 relative">
+    <div className="flex-shrink-0 px-4 pb-4 pt-2">
+      <div className="max-w-3xl mx-auto">
+        <div className={`relative flex items-end gap-2 bg-surface border rounded-2xl px-4 py-3
+          transition-all ${isStreaming ? "border-accent/30" : "border-border hover:border-border/80 focus-within:border-accent/40"}`}>
+
           <textarea
             ref={textareaRef}
             value={value}
@@ -114,45 +121,52 @@ export function InputBar() {
             disabled={isStreaming}
             placeholder={
               isStreaming
-                ? "Streaming response…  (↑↓ to browse history)"
-                : "Ask KaliMCP…  (Enter to send · Shift+Enter newline · ↑↓ history)"
+                ? "Generating…"
+                : "Message KaliMCP..."
             }
             rows={1}
-            className="w-full resize-none bg-background border border-border rounded-xl px-4 py-2.5
-                       text-sm text-text placeholder:text-text/30 focus:outline-none
-                       focus:ring-1 focus:ring-accent/50 disabled:opacity-50 disabled:cursor-not-allowed
-                       font-mono leading-6"
+            className="flex-1 resize-none bg-transparent text-sm text-text placeholder:text-text-muted
+                       focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed
+                       font-sans leading-6 max-h-48 py-0.5"
           />
-          {value.length >= 500 && (
-            <span className="absolute bottom-2 right-3 text-xs text-text/40">
-              {value.length}
-            </span>
-          )}
+
+          <div className="flex items-center gap-1 flex-shrink-0 mb-0.5">
+            {value.length >= 500 && (
+              <span className="text-[10px] text-text-dim mr-1">{value.length}</span>
+            )}
+
+            {isStreaming ? (
+              <button
+                onClick={stopStreaming}
+                className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg
+                           bg-text/10 text-text hover:bg-text/20 transition-colors"
+                aria-label="Stop generation"
+                title="Stop generation (Esc)"
+              >
+                <Square size={14} className="fill-current" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                disabled={!value.trim()}
+                className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg
+                           bg-accent text-background hover:bg-accent-dim transition-colors
+                           disabled:opacity-40 disabled:cursor-not-allowed"
+                aria-label="Send"
+                title="Send (Enter)"
+              >
+                <Send size={14} />
+              </button>
+            )}
+          </div>
         </div>
 
-        {isStreaming ? (
-          <button
-            onClick={handleStop}
-            className="mb-px flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl
-                       bg-red-600 text-white hover:bg-red-500 transition-colors"
-            aria-label="Stop generation"
-            title="Stop generation"
-          >
-            <Square size={16} className="fill-current" />
-          </button>
-        ) : (
-          <button
-            onClick={handleSubmit}
-            disabled={!value.trim()}
-            className="mb-px flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl
-                       bg-accent text-background hover:bg-accent/80 transition-colors
-                       disabled:opacity-50 disabled:cursor-not-allowed"
-            aria-label="Send"
-          >
-            <Send size={16} />
-          </button>
-        )}
+        <p className="text-center text-[10px] text-text-dim mt-1.5">
+          KaliMCP can make mistakes. Use responsibly and only on systems you own or have permission to test.
+        </p>
       </div>
     </div>
   );
 }
+
+

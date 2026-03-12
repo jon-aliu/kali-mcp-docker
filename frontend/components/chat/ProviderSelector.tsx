@@ -34,7 +34,8 @@ const PROVIDERS = [
 export function ProviderSelector() {
   const [open, setOpen] = useState(false);
   const [showKey, setShowKey] = useState(false);
-  const { provider, apiKey, setProvider, setApiKey } = useProviderStore();
+  const { provider, setProvider, setApiKey, activeKey } = useProviderStore();
+  const apiKey = activeKey();
 
   const current = PROVIDERS.find((p) => p.id === provider)!;
 
@@ -108,7 +109,7 @@ export function ProviderSelector() {
                   <input
                     type={showKey ? "text" : "password"}
                     value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
+                    onChange={(e) => setApiKey(provider, e.target.value)}
                     placeholder={current.placeholder}
                     className="w-full bg-background border border-border rounded-xl px-4 py-2.5
                                text-sm text-text font-mono placeholder:text-text/30 pr-10

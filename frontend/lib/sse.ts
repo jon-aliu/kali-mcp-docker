@@ -9,6 +9,7 @@ interface ChatRequest {
   conversation_id: string;
   provider?: string;
   api_key?: string;
+  model?: string;
 }
 
 export interface SSEHandlers {

@@ -16,7 +16,7 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, align = "right" }: { text: string; align?: "left" | "right" }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     await navigator.clipboard.writeText(text);
@@ -26,10 +26,12 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-border/40 text-text/40 hover:text-text/80"
-      title="Copy"
+      className={`opacity-0 group-hover:opacity-100 transition-opacity absolute bottom-1.5
+                  ${align === "right" ? "right-2" : "left-2"}
+                  p-1 rounded-md bg-black/20 hover:bg-black/40 text-text-muted hover:text-text`}
+      title={copied ? "Copied!" : "Copy"}
     >
-      {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+      {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
     </button>
   );
 }
@@ -37,17 +39,15 @@ function CopyButton({ text }: { text: string }) {
 export function MessageBubble({ message }: MessageBubbleProps) {
   if (message.role === "user") {
     return (
-      <div className="flex justify-end mb-3">
+      <div className="flex justify-end mb-3 animate-fade-in">
         <div className="max-w-[75%] group">
           <div className="relative">
-            <div className="bg-user-bubble text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm">
+            <div className="bg-user-bubble text-white rounded-2xl rounded-tr-sm px-4 py-2.5 pb-6 text-sm leading-relaxed">
               {message.content}
             </div>
-            <div className="absolute -left-7 top-1">
-              <CopyButton text={message.content} />
-            </div>
+            <CopyButton text={message.content} align="right" />
           </div>
-          <p className="text-right text-xs text-text/40 mt-1 pr-1">
+          <p className="text-right text-[11px] text-text-dim mt-1 pr-1">
             {formatTime(message.timestamp)}
           </p>
         </div>
@@ -75,8 +75,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             />
           ) : (
             // Pending — show a small inline pill
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-surface text-xs font-mono text-text/50 w-auto animate-pulse">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping" />
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-surface text-xs font-mono text-text-muted w-auto">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping flex-shrink-0" />
               <span>Running: {message.content.replace(/^Running:\s*/, "")}</span>
             </div>
           )}
@@ -87,10 +87,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
   // assistant
   return (
-    <div className="flex justify-start mb-3">
+    <div className="flex justify-start mb-3 animate-fade-in">
       <div className="max-w-[80%] group">
         <div className="relative">
-          <div className="bg-surface text-text rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm prose prose-invert prose-sm max-w-none">
+          <div className="bg-surface text-text rounded-2xl rounded-tl-sm px-4 py-3 pb-7 text-sm prose prose-invert prose-sm max-w-none">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
@@ -98,11 +98,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               {message.content}
             </ReactMarkdown>
           </div>
-          <div className="absolute -right-7 top-1">
-            <CopyButton text={message.content} />
-          </div>
+          <CopyButton text={message.content} align="right" />
         </div>
-        <p className="text-left text-xs text-text/40 mt-1 pl-1">
+        <p className="text-left text-[11px] text-text-dim mt-1 pl-1">
           {formatTime(message.timestamp)}
         </p>
       </div>

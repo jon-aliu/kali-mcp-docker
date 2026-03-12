@@ -63,7 +63,7 @@ Rules:
 
 TOOL_CALL_RE = re.compile(r'^TOOL_CALL:\s*(\{.+\})\s*$', re.MULTILINE)
 
-Provider = Literal["openai", "anthropic", "ollama"]
+Provider = Literal["openai", "anthropic", "ollama", "google"]
 
 # ---------------------------------------------------------------------------
 # Keyword → tool mapping (catches direct tool requests and common queries)
@@ -208,6 +208,7 @@ async def _stream_report(
     provider: Provider,
     api_key: str | None,
     history: list[dict],
+    model: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Ask the LLM to format tool output as a structured report and stream it."""
     output_block = stdout if stdout.strip() else stderr if stderr.strip() else "(no output)"
@@ -222,15 +223,15 @@ async def _stream_report(
             ),
         },
     ]
-    async for token in _pick_stream(provider, api_key, messages):
+    async for token in _pick_stream(provider, api_key, messages, model):
         yield token
 
-async def _stream_openai(messages: list[dict], api_key: str) -> AsyncGenerator[str, None]:
+async def _stream_openai(messages: list[dict], api_key: str, model: str | None = None) -> AsyncGenerator[str, None]:
     """Stream tokens from OpenAI."""
     from openai import AsyncOpenAI
     client = AsyncOpenAI(api_key=api_key)
     stream = await client.chat.completions.create(
-        model=settings.openai_model,
+        model=model or settings.openai_model,
         messages=messages,
         stream=True,
     )
@@ -240,7 +241,7 @@ async def _stream_openai(messages: list[dict], api_key: str) -> AsyncGenerator[s
             yield delta.content
 
 
-async def _stream_anthropic(messages: list[dict], api_key: str) -> AsyncGenerator[str, None]:
+async def _stream_anthropic(messages: list[dict], api_key: str, model: str | None = None) -> AsyncGenerator[str, None]:
     """Stream tokens from Anthropic Claude."""
     import anthropic
 
@@ -249,7 +250,7 @@ async def _stream_anthropic(messages: list[dict], api_key: str) -> AsyncGenerato
 
     client = anthropic.AsyncAnthropic(api_key=api_key)
     async with client.messages.stream(
-        model=settings.anthropic_model,
+        model=model or settings.anthropic_model,
         max_tokens=4096,
         system=system,
         messages=chat_msgs,
@@ -258,13 +259,14 @@ async def _stream_anthropic(messages: list[dict], api_key: str) -> AsyncGenerato
             yield text
 
 
-async def _stream_ollama(messages: list[dict]) -> AsyncGenerator[str, None]:
+async def _stream_ollama(messages: list[dict], model: str | None = None) -> AsyncGenerator[str, None]:
     """Stream tokens from local Ollama."""
+    effective_model = model or settings.ollama_model
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
             "POST",
             f"{settings.ollama_host}/api/chat",
-            json={"model": settings.ollama_model, "messages": messages, "stream": True},
+            json={"model": effective_model, "messages": messages, "stream": True},
         ) as response:
             if response.status_code != 200:
                 body = await response.aread()
@@ -279,11 +281,10 @@ async def _stream_ollama(messages: list[dict]) -> AsyncGenerator[str, None]:
                 if not line:
                     continue
                 data = json.loads(line)
-                # Ollama can return {"error": "..."} even on HTTP 200
                 if "error" in data:
                     raise RuntimeError(
                         f"Ollama: {data['error']} — "
-                        f"pull the model first: docker compose exec ollama ollama pull {settings.ollama_model}"
+                        f"pull the model first: docker compose exec ollama ollama pull {effective_model}"
                     )
                 content = data.get("message", {}).get("content", "")
                 if content:
@@ -292,15 +293,48 @@ async def _stream_ollama(messages: list[dict]) -> AsyncGenerator[str, None]:
 
             if not got_token:
                 raise RuntimeError(
-                    f"Ollama returned no tokens for model '{settings.ollama_model}'. "
-                    f"Pull it first: docker compose exec ollama ollama pull {settings.ollama_model}"
+                    f"Ollama returned no tokens for model '{effective_model}'. "
+                    f"Pull it first: docker compose exec ollama ollama pull {effective_model}"
                 )
+
+
+async def _stream_google(messages: list[dict], api_key: str, model: str | None = None) -> AsyncGenerator[str, None]:
+    """Stream tokens from Google Gemini via the generative AI SDK."""
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        raise RuntimeError("google-generativeai package not installed. Add it to requirements.txt")
+
+    genai.configure(api_key=api_key)
+    effective_model = model or "gemini-2.0-flash"
+
+    system = next((m["content"] for m in messages if m["role"] == "system"), SYSTEM_PROMPT)
+    chat_msgs = [m for m in messages if m["role"] != "system"]
+
+    history_gc = []
+    for m in chat_msgs[:-1]:
+        role = "user" if m["role"] == "user" else "model"
+        history_gc.append({"role": role, "parts": [m["content"]]})
+
+    last_user_msg = chat_msgs[-1]["content"] if chat_msgs else ""
+
+    gc_model = genai.GenerativeModel(
+        model_name=effective_model,
+        system_instruction=system,
+    )
+    chat = gc_model.start_chat(history=history_gc)
+
+    response = await chat.send_message_async(last_user_msg, stream=True)
+    async for chunk in response:
+        if chunk.text:
+            yield chunk.text
 
 
 def _pick_stream(
     provider: Provider,
     api_key: str | None,
     messages: list[dict],
+    model: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Select the streaming generator based on provider + key availability.
@@ -309,17 +343,24 @@ def _pick_stream(
     if provider == "anthropic":
         key = api_key or settings.anthropic_api_key
         if key:
-            return _stream_anthropic(messages, key)
+            return _stream_anthropic(messages, key, model)
         logger.warning("anthropic_no_key_fallback_ollama")
-        return _stream_ollama(messages)
+        return _stream_ollama(messages, model)
 
     if provider == "ollama":
+        return _stream_ollama(messages, model)
+
+    if provider == "google":
+        key = api_key or getattr(settings, "google_api_key", None)
+        if key:
+            return _stream_google(messages, key, model)
+        logger.warning("google_no_key_fallback_ollama")
         return _stream_ollama(messages)
 
     # default: openai
     key = api_key or settings.openai_api_key
     if key:
-        return _stream_openai(messages, key)
+        return _stream_openai(messages, key, model)
     logger.warning("openai_no_key_fallback_ollama")
     return _stream_ollama(messages)
 
@@ -335,6 +376,7 @@ async def stream_chat(
     conversation_id: str,
     provider: Provider = "openai",
     api_key: str | None = None,
+    model: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Main streaming generator. Yields SSE event dicts.
@@ -368,7 +410,7 @@ async def stream_chat(
         async for token in _stream_report(
             tool_name, tool_args,
             result["stdout"], result["stderr"], result["exit_code"],
-            provider, api_key, history,
+            provider, api_key, history, model,
         ):
             report += token
             report_tokens += 1
@@ -395,7 +437,7 @@ async def stream_chat(
         # Normal path: accumulate LLM decision silently, then act
         # ------------------------------------------------------------------
         decision = ""
-        async for token in _pick_stream(provider, api_key, messages):
+        async for token in _pick_stream(provider, api_key, messages, model):
             decision += token
             # Stop early once we have a complete TOOL_CALL line
             if "\n" in decision and TOOL_CALL_RE.search(decision):

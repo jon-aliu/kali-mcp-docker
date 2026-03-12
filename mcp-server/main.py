@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.postgres import engine, Base
 from db.redis import get_redis
-from routers import auth, chat, tools, terminal
+from routers import auth, chat, tools, terminal, admin
 
 # ---------------------------------------------------------------------------
 # Structured logging
@@ -75,6 +75,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/api", tags=["chat"])
 app.include_router(tools.router, prefix="/api", tags=["tools"])
 app.include_router(terminal.router, prefix="/api", tags=["terminal"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 
 
 @app.get("/health")

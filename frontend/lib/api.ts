@@ -30,6 +30,9 @@ async function request<T>(
     throw new Error(detail.detail ?? `HTTP ${res.status}`);
   }
 
+  // 204 No Content
+  if (res.status === 204) return undefined as T;
+
   return res.json();
 }
 
@@ -37,6 +40,8 @@ export interface UserOut {
   id: string;
   username: string;
   email: string;
+  is_active: boolean;
+  is_admin: boolean;
   created_at: string;
 }
 
@@ -56,13 +61,40 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form.toString(),
-      }).then<TokenResponse>((r) => r.json());
+      }).then<TokenResponse>((r) => {
+        if (!r.ok) throw new Error("Invalid credentials");
+        return r.json();
+      });
     },
 
     me: () => request<UserOut>("GET", "/api/auth/me"),
+
+    logout: () => request<{ message: string }>("POST", "/api/auth/logout"),
+
+    changePassword: (current_password: string, new_password: string) =>
+      request<{ message: string }>("POST", "/api/auth/change-password", {
+        current_password,
+        new_password,
+      }),
   },
 
   tools: {
     list: () => request<{ tools: string[] }>("GET", "/api/tools"),
   },
+
+  admin: {
+    listUsers: () => request<UserOut[]>("GET", "/api/admin/users"),
+
+    createUser: (data: { username: string; email: string; password: string }) =>
+      request<UserOut>("POST", "/api/admin/users", data),
+
+    updateUser: (
+      id: string,
+      data: { is_active?: boolean; is_admin?: boolean }
+    ) => request<UserOut>("PATCH", `/api/admin/users/${id}`, data),
+
+    deleteUser: (id: string) =>
+      request<void>("DELETE", `/api/admin/users/${id}`),
+  },
 };
+

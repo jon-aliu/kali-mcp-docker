@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -5,14 +7,75 @@
 @layer base {
   * {
     @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    @apply bg-background text-text;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   body {
     @apply bg-background text-text;
+    min-height: 100dvh;
   }
 
   :root {
     --radius: 0.5rem;
+    --sidebar-width: 260px;
+  }
+
+  /* ── Custom scrollbars ── */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2a2a2a;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #1f1f1f transparent;
+  }
+
+  /* ── Prose overrides for markdown ── */
+  .prose pre {
+    @apply bg-sidebar border border-border rounded-xl overflow-x-auto;
+  }
+  .prose code {
+    @apply text-accent font-mono text-xs;
+  }
+  .prose pre code {
+    @apply text-text;
+  }
+  .prose a {
+    @apply text-accent;
+  }
+  .prose h1, .prose h2, .prose h3 {
+    @apply text-text;
+  }
+  .prose p {
+    @apply text-text/90;
+  }
+  .prose ul, .prose ol {
+    @apply text-text/90;
+  }
+  .prose blockquote {
+    @apply border-accent/30 text-text/70;
+  }
+  .prose table {
+    @apply text-sm;
+  }
+  .prose th {
+    @apply text-text/70 font-medium;
   }
 }
 
@@ -20,4 +83,44 @@
   .text-balance {
     text-wrap: balance;
   }
+
+  .glass {
+    backdrop-filter: blur(12px);
+    background: rgba(20, 20, 20, 0.8);
+  }
+
+  /* Gradient borders */
+  .gradient-border {
+    position: relative;
+  }
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(0,255,136,0.3) 0%, transparent 60%);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Highlight.js theme overrides */
+  .hljs {
+    @apply bg-transparent text-text;
+  }
+  .hljs-keyword { color: #ff79c6; }
+  .hljs-string  { color: #f1fa8c; }
+  .hljs-number  { color: #bd93f9; }
+  .hljs-comment { color: #6272a4; font-style: italic; }
+  .hljs-function { color: #50fa7b; }
+  .hljs-variable { color: #8be9fd; }
+  .hljs-built_in { color: #ffb86c; }
+  .hljs-class { color: #8be9fd; }
+  .hljs-title { color: #50fa7b; }
+  .hljs-attr  { color: #50fa7b; }
+  .hljs-selector-class { color: #50fa7b; }
+  .hljs-type { color: #8be9fd; }
+  .hljs-literal { color: #bd93f9; }
 }

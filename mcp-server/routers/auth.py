@@ -126,3 +126,34 @@ async def logout(
     await redis.set(f"session:{jti}", "revoked", ex=86400)
     logger.info("user_logout", jti=jti)
     return {"message": "Logged out"}
+
+
+from pydantic import BaseModel
+
+
+class ChangePasswordBody(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordBody,
+    request: Request,
+    _: None = Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from sqlalchemy.ext.asyncio import AsyncSession as _AS  # noqa: already imported
+    user_id = request.state.user["sub"]
+    result = await session.execute(select(UserORM).where(UserORM.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not verify_password(body.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    user.hashed_password = hash_password(body.new_password)
+    await session.commit()
+    logger.info("password_changed", user_id=user_id)
+    return {"message": "Password updated successfully"}

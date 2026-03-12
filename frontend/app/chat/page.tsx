@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { Terminal } from "lucide-react";
-import { isAuthenticated, clearToken } from "@/lib/auth";
+import { Terminal, Maximize2, Minimize2, X, Bot } from "lucide-react";
+import { isAuthenticated } from "@/lib/auth";
 import { ChatWindow } from "@/components/chat/ChatWindow";
 import { InputBar } from "@/components/chat/InputBar";
-import { ProviderSelector } from "@/components/chat/ProviderSelector";
+import { ModelSelector } from "@/components/chat/ModelSelector";
+import { Sidebar, SidebarToggle } from "@/components/layout/Sidebar";
+import { useConversationsStore } from "@/store/conversations";
+import { useProviderStore } from "@/store/provider";
 
-// xterm.js requires window — load only on client
 const LiveTerminal = dynamic(
   () => import("@/components/terminal/LiveTerminal").then((m) => m.LiveTerminal),
   { ssr: false }
@@ -17,8 +19,13 @@ const LiveTerminal = dynamic(
 
 export default function ChatPage() {
   const router = useRouter();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalExpanded, setTerminalExpanded] = useState(false);
+  const [suggestion, setSuggestion] = useState("");
+
+  const { activeId, conversations, newConversation } = useConversationsStore();
+  const { provider, models } = useProviderStore();
 
   useEffect(() => {
     if (!isAuthenticated()) {
@@ -26,70 +33,106 @@ export default function ChatPage() {
     }
   }, [router]);
 
-  const handleLogout = () => {
-    clearToken();
-    router.replace("/login");
-  };
+  // Ensure there's always an active conversation
+  useEffect(() => {
+    if (!activeId || !conversations.find((c) => c.id === activeId)) {
+      newConversation(provider, models[provider]);
+    }
+  }, []);
+
+  const handleSuggestion = useCallback((text: string) => {
+    setSuggestion(text);
+  }, []);
+
+  const activeConv = conversations.find((c) => c.id === activeId);
 
   return (
-    <div className="flex flex-col h-screen bg-background text-text">
-      {/* ── Header ── */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-border bg-surface flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-bold text-accent text-lg">KaliMCP</span>
-          <span className="text-text/30 text-xs font-mono hidden sm:inline">
-            AI Security Assistant
-          </span>
-        </div>
+    <div className="flex h-screen overflow-hidden bg-background">
+      {/* Sidebar */}
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-        <div className="flex items-center gap-2">
-          <ProviderSelector />
+      {/* Main content */}
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        {/* ── Header ── */}
+        <header className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-border bg-background flex-shrink-0 z-10">
+          <div className="flex items-center gap-2 min-w-0">
+            <SidebarToggle onClick={() => setSidebarOpen(true)} />
+            {/* Desktop logo (visible when sidebar is open on desktop) */}
+            <div className="hidden lg:flex items-center gap-2">
+              <Bot size={16} className="text-accent flex-shrink-0" />
+              <span className="font-mono font-bold text-accent text-sm">KaliMCP</span>
+            </div>
+            {activeConv && (
+              <span className="text-text-muted text-xs truncate max-w-[200px] hidden sm:block">
+                {activeConv.title === "New conversation" ? "" : activeConv.title}
+              </span>
+            )}
+          </div>
 
-          <button
-            onClick={() => setTerminalOpen((v) => !v)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors text-sm ${
-              terminalOpen
-                ? "border-accent/60 text-accent bg-accent/10"
-                : "border-border text-text/70 hover:text-accent hover:border-accent/50"
-            }`}
-            title={terminalOpen ? "Close Kali Terminal" : "Open Kali Terminal"}
-          >
-            <Terminal size={14} />
-            <span className="hidden sm:inline font-mono text-xs">Terminal</span>
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <ModelSelector />
 
-          <button
-            onClick={handleLogout}
-            className="px-3 py-1.5 rounded-lg text-text/50 hover:text-text text-xs font-mono
-                       transition-colors border border-transparent hover:border-border"
-          >
-            Logout
-          </button>
-        </div>
-      </header>
+            <button
+              onClick={() => setTerminalOpen((v) => !v)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors text-xs ${
+                terminalOpen
+                  ? "border-accent/50 text-accent bg-accent/10"
+                  : "border-border text-text-muted hover:text-text hover:border-border/80"
+              }`}
+              title={terminalOpen ? "Close terminal" : "Open Kali terminal"}
+            >
+              <Terminal size={13} />
+              <span className="hidden sm:inline font-mono">Terminal</span>
+            </button>
+          </div>
+        </header>
 
-      {/* ── Main area: [terminal panel] + [chat] ── */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left terminal panel */}
-        {terminalOpen && (
-          <div
-            className={`flex-shrink-0 transition-all duration-200 ${
-              terminalExpanded ? "w-1/2" : "w-[420px]"
-            }`}
-          >
-            <LiveTerminal
-              open={terminalOpen}
-              onClose={() => setTerminalOpen(false)}
-              onExpand={() => setTerminalExpanded((v) => !v)}
-              expanded={terminalExpanded}
+        {/* ── Content area: [terminal] + [chat] ── */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Terminal panel */}
+          {terminalOpen && (
+            <div
+              className={`flex-shrink-0 border-r border-border flex flex-col transition-all duration-200 ${
+                terminalExpanded ? "w-1/2" : "w-[380px]"
+              }`}
+            >
+              {/* Terminal header */}
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-sidebar flex-shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+                  <span className="text-xs font-mono text-text-muted">Kali Linux</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setTerminalExpanded((v) => !v)}
+                    className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text transition-colors"
+                    title={terminalExpanded ? "Shrink" : "Expand"}
+                  >
+                    {terminalExpanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                  </button>
+                  <button
+                    onClick={() => setTerminalOpen(false)}
+                    className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text transition-colors"
+                    title="Close terminal"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <LiveTerminal open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+              </div>
+            </div>
+          )}
+
+          {/* Chat panel */}
+          <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+            <ChatWindow onSuggestion={handleSuggestion} />
+            <InputBar
+              suggestion={suggestion}
+              onSuggestionConsumed={() => setSuggestion("")}
             />
           </div>
-        )}
-
-        {/* Right chat area */}
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-          <ChatWindow />
-          <InputBar />
         </div>
       </div>
     </div>

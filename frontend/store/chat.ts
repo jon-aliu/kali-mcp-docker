@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { streamChat } from "@/lib/sse";
 import { useProviderStore } from "@/store/provider";
+import { useConversationsStore, titleFromMessage } from "@/store/conversations";
 
 export interface Message {
   id: string;
@@ -16,21 +17,16 @@ export interface Message {
 }
 
 interface ChatState {
-  messages: Message[];
+  /** Transient streaming state — the actual messages are stored in conversations store */
   isStreaming: boolean;
-  conversationId: string;
   _abortController: AbortController | null;
-  addMessage: (msg: Message) => void;
-  appendToken: (token: string) => void;
-  setStreaming: (v: boolean) => void;
+
   stopStreaming: () => void;
   sendMessage: (text: string) => Promise<void>;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
-  messages: [],
   isStreaming: false,
-  conversationId: crypto.randomUUID(),
   _abortController: null,
 
   stopStreaming: () => {
@@ -38,96 +34,153 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ isStreaming: false, _abortController: null });
   },
 
-  addMessage: (msg) =>
-    set((s) => ({ messages: [...s.messages, msg] })),
-
-  appendToken: (token) =>
-    set((s) => {
-      const msgs = [...s.messages];
-      const last = msgs[msgs.length - 1];
-      if (last && last.role === "assistant") {
-        msgs[msgs.length - 1] = { ...last, content: last.content + token };
-      } else {
-        msgs.push({
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: token,
-          timestamp: new Date(),
-        });
-      }
-      return { messages: msgs };
-    }),
-
-  setStreaming: (v) => set({ isStreaming: v }),
-
   sendMessage: async (text: string) => {
-    const { conversationId, addMessage, appendToken, setStreaming } = get();
-    const { provider, apiKey } = useProviderStore.getState();
+    const convStore = useConversationsStore.getState();
+    const providerStore = useProviderStore.getState();
 
-    addMessage({
+    // If no active conversation, create one
+    let conv = convStore.getActive();
+    if (!conv) {
+      conv = convStore.newConversation(
+        providerStore.provider,
+        providerStore.activeModel()
+      );
+    }
+
+    const convId = conv.id;
+
+    // Add user message
+    const userMsg: Message = {
       id: crypto.randomUUID(),
       role: "user",
       content: text,
       timestamp: new Date(),
+    };
+
+    const currentMessages = conv.messages;
+    // Auto-generate title from first message
+    const newTitle =
+      conv.autoTitle && currentMessages.length === 0
+        ? titleFromMessage(text)
+        : conv.title;
+
+    convStore.updateConversation(convId, {
+      messages: [...currentMessages, userMsg],
+      title: newTitle,
+      autoTitle: conv.autoTitle && currentMessages.length > 0 ? conv.autoTitle : false,
     });
 
-    setStreaming(true);
+    set({ isStreaming: true });
     const controller = new AbortController();
     set({ _abortController: controller });
+
+    const { provider, activeKey, activeModel } = providerStore;
 
     try {
       await streamChat(
         {
           message: text,
-          conversation_id: conversationId,
+          conversation_id: convId,
           provider,
-          api_key: apiKey || undefined,
+          api_key: activeKey() || undefined,
+          model: activeModel(),
         },
         {
-          onToken: (token) => appendToken(token),
+          onToken: (token) => {
+            const updated = useConversationsStore.getState();
+            const c = updated.conversations.find((c) => c.id === convId);
+            if (!c) return;
+            const msgs = [...c.messages];
+            const last = msgs[msgs.length - 1];
+            if (last && last.role === "assistant") {
+              msgs[msgs.length - 1] = { ...last, content: last.content + token };
+            } else {
+              msgs.push({
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: token,
+                timestamp: new Date(),
+              });
+            }
+            useConversationsStore.getState().updateConversation(convId, { messages: msgs });
+          },
           onToolStart: (tool, args) => {
-            addMessage({
+            const c = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+            if (!c) return;
+            const toolMsg: Message = {
               id: crypto.randomUUID(),
               role: "tool",
               content: `Running: ${tool} ${args}`,
               timestamp: new Date(),
+            };
+            useConversationsStore.getState().updateConversation(convId, {
+              messages: [...c.messages, toolMsg],
             });
           },
           onToolOutput: (output) => {
-            const msgs = get().messages;
-            const toolMsg = msgs[msgs.length - 1];
-            if (toolMsg && toolMsg.role === "tool") {
-              set((s) => {
-                const updated = [...s.messages];
-                updated[updated.length - 1] = { ...toolMsg, toolOutput: output };
-                return { messages: updated };
-              });
+            const c = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+            if (!c) return;
+            const msgs = [...c.messages];
+            const last = msgs[msgs.length - 1];
+            if (last && last.role === "tool") {
+              msgs[msgs.length - 1] = { ...last, toolOutput: output };
+              useConversationsStore.getState().updateConversation(convId, { messages: msgs });
             }
           },
           onDone: () => set({ isStreaming: false, _abortController: null }),
           onError: (msg) => {
-            addMessage({
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: `Error: ${msg}`,
-              timestamp: new Date(),
-            });
+            const c = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+            if (c) {
+              useConversationsStore.getState().updateConversation(convId, {
+                messages: [
+                  ...c.messages,
+                  {
+                    id: crypto.randomUUID(),
+                    role: "assistant",
+                    content: `⚠️ ${msg}`,
+                    timestamp: new Date(),
+                  },
+                ],
+              });
+            }
             set({ isStreaming: false, _abortController: null });
           },
         },
         controller.signal
       );
     } catch (e) {
-      // AbortError is expected when user clicks Stop
-      if (e instanceof Error && e.name !== "AbortError") {
-        addMessage({
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Response stopped.",
-          timestamp: new Date(),
-        });
+      if ((e as Error)?.name !== "AbortError") {
+        const c = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+        if (c) {
+          useConversationsStore.getState().updateConversation(convId, {
+            messages: [
+              ...c.messages,
+              {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: `⚠️ Connection error: ${(e as Error).message}`,
+                timestamp: new Date(),
+              },
+            ],
+          });
+        }
       }
       set({ isStreaming: false, _abortController: null });
     }
   },
 }));
+
+
+export interface Message {
+  id: string;
+  role: "user" | "assistant" | "tool";
+  content: string;
+  toolOutput?: {
+    stdout: string;
+    stderr: string;
+    exit_code: number;
+    duration: number;
+  };
+  timestamp: Date;
+}
+
